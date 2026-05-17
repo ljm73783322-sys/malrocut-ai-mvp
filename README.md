@@ -36,7 +36,28 @@
 
 ## 폴더 구조
 - `/docs`: 프로젝트 요구사항, 기획, API, 분석 문서
-- `/frontend`: 웹 프론트엔드 (Next.js 예정)
-- `/backend`: 백엔드 API 및 AI 처리 (FastAPI 예정)
+- `/frontend`: 웹 프론트엔드 (Next.js)
+- `/backend`: 백엔드 API 및 AI 처리 (FastAPI)
 - `/scripts`: 유틸리티 및 자동화 스크립트
 - `/.codex`: AI 에이전트 스킬 및 설정
+
+## 로컬 실행 방법 (Windows PowerShell 기준)
+
+### 1. 백엔드 (FastAPI) 실행
+```powershell
+cd backend
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+### 2. 프론트엔드 (Next.js) 실행
+새로운 PowerShell 창을 열고 아래 명령어를 실행하세요.
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+브라우저에서 `http://localhost:3000`에 접속하여 말로컷 AI MVP를 테스트할 수 있습니다.
