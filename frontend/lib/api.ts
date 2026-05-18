@@ -3,6 +3,9 @@ import axios, { AxiosError } from 'axios';
 // 백엔드 주소 고정 (Next.js 프록시 우회)
 const BASE_URL = 'http://127.0.0.1:8000';
 
+// 컴포넌트에서 직접 URL을 구성할 때 사용
+export const API_BASE_URL = BASE_URL;
+
 const api = axios.create({
   baseURL: `${BASE_URL}/api`,
 });
@@ -79,3 +82,31 @@ export const getStatus = async (jobId: string) => {
   const res = await api.get(`/jobs/${jobId}/status`);
   return res.data;
 };
+
+// ─── 타임라인 썸네일 ──────────────────────────────────────────────────────
+
+export interface TimelineThumbnail {
+  time: number;
+  url: string;
+}
+
+export interface TimelineThumbnailsResponse {
+  job_id: string;
+  duration: number;
+  thumbnails: TimelineThumbnail[];
+}
+
+export const getTimelineThumbnails = async (jobId: string): Promise<TimelineThumbnailsResponse> => {
+  const res = await api.get(`/jobs/${jobId}/timeline-thumbnails`);
+  return res.data;
+};
+
+// ─── URL 생성 헬퍼 ────────────────────────────────────────────────────────
+
+/** 원본 영상 스트리밍 URL */
+export const getInputVideoUrl = (jobId: string): string =>
+  `${API_BASE_URL}/api/jobs/${jobId}/download/original_video`;
+
+/** 타임라인 썸네일 이미지의 절대 URL (상대 경로를 절대로 변환) */
+export const getThumbnailAbsoluteUrl = (relativeUrl: string): string =>
+  `${API_BASE_URL}${relativeUrl}`;

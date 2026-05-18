@@ -93,7 +93,12 @@ export default function EditPage({ params }: { params: { job_id: string } }) {
         )}
 
         {/* 자막 비교 표시 */}
-        <SubtitleCompare jobId={params.job_id} />
+        <SubtitleCompare
+          jobId={params.job_id}
+          addSubtitle={result.edit_command.add_subtitle}
+          subtitleSize={result.edit_command.subtitle_size}
+          subtitleLanguage={result.edit_command.subtitle_language}
+        />
 
         <button
           onClick={handleRender}

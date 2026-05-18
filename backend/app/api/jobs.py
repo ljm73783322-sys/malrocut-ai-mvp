@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ..models.job import JobStatus
-from ..services import job_store, video_service, edit_service, render_service
+from ..services import job_store, video_service, edit_service, render_service, thumbnail_service
 from ..utils.paths import get_job_dir
 
 router = APIRouter()
@@ -89,3 +89,49 @@ async def download_file(job_id: str, file_type: str):
         
     media_type = "video/mp4" if "video" in file_type else "image/jpeg" if file_type == "thumbnail" else "text/plain"
     return FileResponse(path=file_path, filename=filename_map[file_type], media_type=media_type)
+
+
+# ---------------------------------------------------------------------------
+# 타임라인 썸네일 API
+# ---------------------------------------------------------------------------
+
+@router.get("/{job_id}/timeline-thumbnails")
+async def get_timeline_thumbnails(job_id: str):
+    """1초 간격 타임라인 썸네일 목록을 반환합니다."""
+    job_dir = get_job_dir(job_id)
+    input_path = os.path.join(job_dir, "input.mp4")
+    if not os.path.exists(input_path):
+        raise HTTPException(status_code=404, detail="Input video not found")
+
+    meta = thumbnail_service.generate_timeline_thumbnails(job_id)
+
+    base_url = f"/api/jobs/{job_id}/thumbnails"
+    thumbnails = []
+    for i in range(meta["count"]):
+        filename = f"thumb_{i:03d}.jpg"
+        thumbnails.append({
+            "time": i,
+            "url": f"{base_url}/{filename}",
+        })
+
+    return {
+        "job_id": job_id,
+        "duration": meta["duration"],
+        "thumbnails": thumbnails,
+    }
+
+
+@router.get("/{job_id}/thumbnails/{filename}")
+async def get_thumbnail_file(job_id: str, filename: str):
+    """개별 타임라인 썸네일 파일을 반환합니다."""
+    # 보안: 파일명에 경로 이탈 방지
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    job_dir = get_job_dir(job_id)
+    file_path = os.path.join(job_dir, "thumbnails", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+    return FileResponse(path=file_path, filename=filename, media_type="image/jpeg")
+

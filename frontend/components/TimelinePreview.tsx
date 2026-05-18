@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useRef, useState, useEffect } from "react";
-import { API_BASE_URL } from "@/lib/api";
+import React, { useRef, useState } from "react";
+import { getInputVideoUrl } from "@/lib/api";
+import ThumbnailTimeline from "@/components/ThumbnailTimeline";
 
 interface Clip {
   id: string;
@@ -21,27 +22,41 @@ interface Segment {
   start: number;
   end: number;
   color: string;
-  isModified: boolean;
+  textColor: string;
 }
+
+type VideoState = "loading" | "ready" | "error";
 
 export default function TimelinePreview({ jobId, clips }: TimelinePreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [duration, setDuration] = useState<number>(0);
+  const [videoState, setVideoState] = useState<VideoState>("loading");
   const [activeSegment, setActiveSegment] = useState<Segment | null>(null);
+  const [playingLabel, setPlayingLabel] = useState<string>("");
 
-  // 비디오 메타데이터가 로드되면 전체 길이를 설정
+  // ── 이벤트 핸들러 ─────────────────────────────────────────────────────
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-      setDuration(videoRef.current.duration);
+      const d = videoRef.current.duration;
+      if (!d || isNaN(d) || d <= 0) {
+        setVideoState("error");
+      } else {
+        setDuration(d);
+        setVideoState("ready");
+      }
     }
   };
 
-  // 비디오 재생 중 구간 끝을 넘어가면 정지하는 간단한 로직
+  const handleError = () => {
+    setVideoState("error");
+  };
+
   const handleTimeUpdate = () => {
     if (videoRef.current && activeSegment) {
       if (videoRef.current.currentTime >= activeSegment.end) {
         videoRef.current.pause();
         setActiveSegment(null);
+        setPlayingLabel("");
       }
     }
   };
@@ -51,10 +66,11 @@ export default function TimelinePreview({ jobId, clips }: TimelinePreviewProps) 
       videoRef.current.currentTime = seg.start;
       videoRef.current.play();
       setActiveSegment(seg);
+      setPlayingLabel(seg.label);
     }
   };
 
-  // 구간 분할 로직
+  // ── 구간 분할 ────────────────────────────────────────────────────────
   const buildSegments = () => {
     if (clips.length !== 2 || duration === 0) return { original: [], modified: [] };
 
@@ -67,92 +83,181 @@ export default function TimelinePreview({ jobId, clips }: TimelinePreviewProps) 
     const s2 = c2.source_start;
     const e2 = Math.min(c2.source_end, duration);
 
-    // 구간 배열 정의
-    const original: Segment[] = [];
-    const pushSeg = (arr: Segment[], start: number, end: number, label: string, color: string, isMod: boolean) => {
-      if (end - start > 0.1) {
-        arr.push({ id: Math.random().toString(), start, end, label, color, isModified: isMod });
+    const makeSeg = (start: number, end: number, label: string, color: string, textColor: string): Segment | null => {
+      if (end - start > 0.05) {
+        return { id: `${start}-${end}`, start, end, label, color, textColor };
       }
+      return null;
     };
 
-    pushSeg(original, 0, s1, "기본 구간", "bg-gray-200", false);
-    pushSeg(original, s1, e1, "구간 A", "bg-blue-300", true);
-    pushSeg(original, e1, s2, "기본 구간", "bg-gray-200", false);
-    pushSeg(original, s2, e2, "구간 B", "bg-green-300", true);
-    pushSeg(original, e2, duration, "기본 구간", "bg-gray-200", false);
+    const original: Segment[] = [
+      makeSeg(0, s1, "기본", "#e5e7eb", "#6b7280"),
+      makeSeg(s1, e1, `구간 A (${s1}~${e1}초)`, "#93c5fd", "#1e3a5f"),
+      makeSeg(e1, s2, "기본", "#e5e7eb", "#6b7280"),
+      makeSeg(s2, e2, `구간 B (${s2}~${e2}초)`, "#86efac", "#14532d"),
+      makeSeg(e2, duration, "기본", "#e5e7eb", "#6b7280"),
+    ].filter(Boolean) as Segment[];
 
-    // 수정 후 배열
-    const modified: Segment[] = [];
-    pushSeg(modified, 0, s1, "기본 구간", "bg-gray-200", false);
-    pushSeg(modified, s2, e2, "구간 B (이동됨)", "bg-green-300", true);
-    pushSeg(modified, e1, s2, "기본 구간", "bg-gray-200", false);
-    pushSeg(modified, s1, e1, "구간 A (이동됨)", "bg-blue-300", true);
-    pushSeg(modified, e2, duration, "기본 구간", "bg-gray-200", false);
+    const modified: Segment[] = [
+      makeSeg(0, s1, "기본", "#e5e7eb", "#6b7280"),
+      makeSeg(s2, e2, `구간 B → 앞으로`, "#86efac", "#14532d"),
+      makeSeg(e1, s2, "기본", "#e5e7eb", "#6b7280"),
+      makeSeg(s1, e1, `구간 A → 뒤로`, "#93c5fd", "#1e3a5f"),
+      makeSeg(e2, duration, "기본", "#e5e7eb", "#6b7280"),
+    ].filter(Boolean) as Segment[];
 
     return { original, modified };
   };
 
   const { original, modified } = buildSegments();
 
-  const renderTimeline = (title: string, segments: Segment[]) => (
-    <div className="mb-6">
-      <h3 className="text-xl font-bold mb-3">{title}</h3>
-      <div className="flex w-full h-16 rounded-xl overflow-hidden border-2 border-gray-300 shadow-sm">
-        {segments.map((seg, i) => {
-          const widthPct = ((seg.end - seg.start) / duration) * 100;
-          return (
-            <div
-              key={i}
-              onClick={() => playSegment(seg)}
-              className={`h-full flex items-center justify-center cursor-pointer transition-opacity hover:opacity-80 border-r border-white ${seg.color}`}
-              style={{ width: `${widthPct}%` }}
-              title={`${seg.start}초 ~ ${seg.end}초 재생`}
-            >
-              <span className="text-sm font-semibold whitespace-nowrap overflow-hidden px-1">
-                {seg.label}
-              </span>
-            </div>
-          );
-        })}
+  // ── 타임라인 바 렌더링 ────────────────────────────────────────────────
+  const renderTimeline = (title: string, segments: Segment[]) => {
+    const totalDur = segments.reduce((acc, s) => acc + (s.end - s.start), 0);
+    return (
+      <div className="mb-5">
+        <h3 className="text-xl font-bold mb-2 text-gray-700">{title}</h3>
+        <div className="flex w-full h-14 rounded-xl overflow-hidden border-2 border-gray-300 shadow-sm">
+          {segments.map((seg, i) => {
+            const widthPct = totalDur > 0 ? ((seg.end - seg.start) / totalDur) * 100 : 0;
+            const isActive = activeSegment?.id === seg.id;
+            return (
+              <div
+                key={i}
+                onClick={() => playSegment(seg)}
+                className="h-full flex items-center justify-center cursor-pointer transition-all border-r border-white/50"
+                style={{
+                  width: `${widthPct}%`,
+                  backgroundColor: seg.color,
+                  color: seg.textColor,
+                  outline: isActive ? "3px solid #2563eb" : "none",
+                  outlineOffset: "-3px",
+                }}
+                title={`${seg.start.toFixed(1)}초 ~ ${seg.end.toFixed(1)}초 클릭하면 재생`}
+              >
+                <span className="text-xs sm:text-sm font-bold whitespace-nowrap overflow-hidden px-1">
+                  {seg.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
-      <p className="text-gray-500 text-sm mt-2 text-center">
-        * 색칠된 블록을 누르면 해당 영상 구간이 바로 재생됩니다.
-      </p>
-    </div>
-  );
+    );
+  };
 
+  // ── 구간 버튼 ────────────────────────────────────────────────────────
+  const renderSegmentButtons = () => {
+    if (clips.length !== 2 || duration === 0) return null;
+
+    const sorted = [...clips].sort((a, b) => a.source_start - b.source_start);
+    const c1 = sorted[0];
+    const c2 = sorted[1];
+
+    const buttons = [
+      {
+        label: `▶ 구간 A (${c1.source_start}~${c1.source_end}초) 보기`,
+        seg: { id: "a", label: "구간 A", start: c1.source_start, end: Math.min(c1.source_end, duration), color: "#93c5fd", textColor: "#1e3a5f" },
+        bg: "bg-blue-100 hover:bg-blue-200 text-blue-800 border-blue-300",
+      },
+      {
+        label: `▶ 구간 B (${c2.source_start}~${c2.source_end}초) 보기`,
+        seg: { id: "b", label: "구간 B", start: c2.source_start, end: Math.min(c2.source_end, duration), color: "#86efac", textColor: "#14532d" },
+        bg: "bg-green-100 hover:bg-green-200 text-green-800 border-green-300",
+      },
+    ];
+
+    return (
+      <div className="flex flex-col sm:flex-row gap-3 mt-4">
+        {buttons.map((btn, i) => (
+          <button
+            key={i}
+            onClick={() => playSegment(btn.seg)}
+            className={`flex-1 text-lg font-bold py-4 px-6 rounded-xl border-2 transition-colors ${btn.bg}`}
+          >
+            {btn.label}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  // ── 비디오 URL ────────────────────────────────────────────────────────
+  const videoUrl = getInputVideoUrl(jobId);
+
+  // ── 메인 렌더링 ───────────────────────────────────────────────────────
   return (
     <div className="w-full bg-white rounded-2xl shadow-lg p-6 mb-8 border-2 border-blue-100">
-      <h2 className="text-2xl font-extrabold text-blue-900 mb-6 flex items-center">
-        <span className="bg-blue-100 text-blue-600 px-3 py-1 rounded-lg mr-3 text-lg">기능 미리보기</span>
+      <h2 className="text-2xl font-extrabold text-blue-900 mb-4 flex items-center">
+        <span className="bg-blue-100 text-blue-600 px-3 py-1 rounded-lg mr-3 text-lg">미리보기</span>
         컷 순서 변경 확인
       </h2>
 
-      <div className="mb-6 bg-black rounded-xl overflow-hidden shadow-md flex justify-center">
+      {/* 비디오 플레이어 */}
+      <div className="mb-4 bg-black rounded-xl overflow-hidden shadow-md flex justify-center">
         <video
           ref={videoRef}
-          src={`${API_BASE_URL}/api/jobs/${jobId}/download/original_video`}
+          src={videoUrl}
           controls
+          preload="metadata"
           className="max-h-[300px] w-auto"
           onLoadedMetadata={handleLoadedMetadata}
+          onError={handleError}
           onTimeUpdate={handleTimeUpdate}
         />
       </div>
 
-      {duration > 0 ? (
+      {/* 재생 중 표시 */}
+      {playingLabel && (
+        <p className="text-center text-lg font-semibold text-blue-600 mb-3 animate-pulse">
+          🎬 지금 재생 중: {playingLabel}
+        </p>
+      )}
+
+      {/* 상태별 표시 */}
+      {videoState === "loading" && (
+        <div className="text-center py-8">
+          <div className="inline-block w-8 h-8 border-4 border-blue-300 border-t-blue-600 rounded-full animate-spin mb-3"></div>
+          <p className="text-xl text-gray-500">영상을 불러오는 중입니다...</p>
+        </div>
+      )}
+
+      {videoState === "error" && (
+        <div className="text-center py-8 bg-red-50 rounded-xl border border-red-200">
+          <p className="text-xl text-red-600 font-bold mb-2">⚠️ 영상을 불러올 수 없습니다</p>
+          <p className="text-gray-500">원본 영상 파일이 서버에 없거나 형식이 지원되지 않습니다.</p>
+        </div>
+      )}
+
+      {videoState === "ready" && (
         <>
-          {renderTimeline("원본 영상 순서", original)}
-          <div className="flex justify-center my-4">
-            <svg className="w-8 h-8 text-gray-400 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          {/* ★ 썸네일 타임라인 */}
+          <ThumbnailTimeline
+            jobId={jobId}
+            clips={clips}
+            videoRef={videoRef}
+          />
+
+          {/* 구간 버튼 */}
+          {renderSegmentButtons()}
+
+          <div className="mt-6" />
+
+          {/* 타임라인 비교 */}
+          {renderTimeline("📼 원본 영상 순서", original)}
+
+          <div className="flex justify-center my-2">
+            <svg className="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
             </svg>
           </div>
-          {renderTimeline("수정 후 적용될 순서", modified)}
+
+          {renderTimeline("✨ 수정 후 적용될 순서", modified)}
+
+          <p className="text-gray-400 text-sm mt-3 text-center">
+            * 타임라인 블록이나 위의 버튼을 누르면 해당 구간이 바로 재생됩니다.
+          </p>
         </>
-      ) : (
-        <div className="text-center py-10 text-gray-500">
-          영상 정보를 불러오는 중입니다...
-        </div>
       )}
     </div>
   );
