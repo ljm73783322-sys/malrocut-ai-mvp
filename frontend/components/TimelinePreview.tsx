@@ -28,12 +28,16 @@ interface Segment {
 
 type VideoState = "loading" | "ready" | "error";
 
+const DEFAULT_SUBTITLE = "말로컷 AI로 새롭게 편집된 영상입니다";
+
 export default function TimelinePreview({ jobId, clips = [], editCommand }: TimelinePreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [duration, setDuration] = useState<number>(0);
   const [videoState, setVideoState] = useState<VideoState>("loading");
   const [activeSegment, setActiveSegment] = useState<Segment | null>(null);
   const [playingLabel, setPlayingLabel] = useState<string>("");
+  const clipA = clips[0] ?? null;
+  const clipB = clips[1] ?? null;
 
   // ── 이벤트 핸들러 ─────────────────────────────────────────────────────
   const handleLoadedMetadata = () => {
@@ -73,16 +77,12 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
 
   // ── 구간 분할 ────────────────────────────────────────────────────────
   const buildSegments = () => {
-    if (clips.length !== 2 || duration === 0) return { original: [], modified: [] };
+    if (!clipA || !clipB || duration === 0) return { original: [], modified: [] };
 
-    const sorted = [...clips].sort((a, b) => a.source_start - b.source_start);
-    const c1 = sorted[0];
-    const c2 = sorted[1];
-
-    const s1 = c1.source_start;
-    const e1 = Math.min(c1.source_end, duration);
-    const s2 = c2.source_start;
-    const e2 = Math.min(c2.source_end, duration);
+    const s1 = clipA.source_start;
+    const e1 = Math.min(clipA.source_end, duration);
+    const s2 = clipB.source_start;
+    const e2 = Math.min(clipB.source_end, duration);
 
     const makeSeg = (start: number, end: number, label: string, color: string, textColor: string): Segment | null => {
       if (end - start > 0.05) {
@@ -93,17 +93,17 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
 
     const original: Segment[] = [
       makeSeg(0, s1, "기본", "#e5e7eb", "#6b7280"),
-      makeSeg(s1, e1, `구간 A (${s1}~${e1}초)`, "#93c5fd", "#1e3a5f"),
+      makeSeg(s1, e1, "A", "#93c5fd", "#1e3a5f"),
       makeSeg(e1, s2, "기본", "#e5e7eb", "#6b7280"),
-      makeSeg(s2, e2, `구간 B (${s2}~${e2}초)`, "#86efac", "#14532d"),
+      makeSeg(s2, e2, "B", "#86efac", "#14532d"),
       makeSeg(e2, duration, "기본", "#e5e7eb", "#6b7280"),
     ].filter(Boolean) as Segment[];
 
     const modified: Segment[] = [
       makeSeg(0, s1, "기본", "#e5e7eb", "#6b7280"),
-      makeSeg(s2, e2, `구간 B → 앞으로`, "#86efac", "#14532d"),
+      makeSeg(s2, e2, "B", "#86efac", "#14532d"),
       makeSeg(e1, s2, "기본", "#e5e7eb", "#6b7280"),
-      makeSeg(s1, e1, `구간 A → 뒤로`, "#93c5fd", "#1e3a5f"),
+      makeSeg(s1, e1, "A", "#93c5fd", "#1e3a5f"),
       makeSeg(e2, duration, "기본", "#e5e7eb", "#6b7280"),
     ].filter(Boolean) as Segment[];
 
@@ -134,9 +134,9 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
                   outline: isActive ? "3px solid #2563eb" : "none",
                   outlineOffset: "-3px",
                 }}
-                title={`${seg.start.toFixed(1)}초 ~ ${seg.end.toFixed(1)}초 클릭하면 재생`}
+                title={`${seg.label} | ${seg.start.toFixed(1)}초 ~ ${seg.end.toFixed(1)}초 클릭하면 재생`}
               >
-                <span className="text-xs sm:text-sm font-bold whitespace-nowrap overflow-hidden px-1">
+                <span className="text-xs sm:text-sm font-bold whitespace-nowrap px-1">
                   {seg.label}
                 </span>
               </div>
@@ -149,21 +149,17 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
 
   // ── 구간 버튼 ────────────────────────────────────────────────────────
   const renderSegmentButtons = () => {
-    if (clips.length !== 2 || duration === 0) return null;
-
-    const sorted = [...clips].sort((a, b) => a.source_start - b.source_start);
-    const c1 = sorted[0];
-    const c2 = sorted[1];
+    if (!clipA || !clipB || duration === 0) return null;
 
     const buttons = [
       {
-        label: `▶ 구간 A (${c1.source_start}~${c1.source_end}초) 보기`,
-        seg: { id: "a", label: "구간 A", start: c1.source_start, end: Math.min(c1.source_end, duration), color: "#93c5fd", textColor: "#1e3a5f" },
+        label: `▶ 구간 A (${clipA.source_start}~${clipA.source_end}초) 보기`,
+        seg: { id: "a", label: "구간 A", start: clipA.source_start, end: Math.min(clipA.source_end, duration), color: "#93c5fd", textColor: "#1e3a5f" },
         bg: "bg-blue-100 hover:bg-blue-200 text-blue-800 border-blue-300",
       },
       {
-        label: `▶ 구간 B (${c2.source_start}~${c2.source_end}초) 보기`,
-        seg: { id: "b", label: "구간 B", start: c2.source_start, end: Math.min(c2.source_end, duration), color: "#86efac", textColor: "#14532d" },
+        label: `▶ 구간 B (${clipB.source_start}~${clipB.source_end}초) 보기`,
+        seg: { id: "b", label: "구간 B", start: clipB.source_start, end: Math.min(clipB.source_end, duration), color: "#86efac", textColor: "#14532d" },
         bg: "bg-green-100 hover:bg-green-200 text-green-800 border-green-300",
       },
     ];
@@ -207,22 +203,27 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
           onTimeUpdate={handleTimeUpdate}
         />
         
-        {/* ★ CSS 자막 오버레이 (Preview-only UI) */}
+        {/* preview-only 자막 영역 가리기/새 자막 오버레이 */}
         {editCommand && (editCommand.cover_subtitle_area || editCommand.add_subtitle) && (
-          <div className="absolute bottom-[50px] left-0 w-full flex flex-col items-center pointer-events-none">
-            <span className="text-[10px] bg-red-500/80 text-white px-2 py-0.5 rounded mb-1">
-              Preview-only UI (실제 렌더링 시 적용됨)
-            </span>
-            <div className="bg-black w-[80%] h-[15%] min-h-[40px] flex items-center justify-center px-4 rounded-sm">
-              {editCommand.add_subtitle && (
-                <p className={`text-white font-bold text-center ${
-                  editCommand.subtitle_size === 'large' ? 'text-2xl sm:text-3xl' :
-                  editCommand.subtitle_size === 'small' ? 'text-sm sm:text-base' :
-                  'text-lg sm:text-xl'
-                }`}>
-                  {editCommand.subtitle_text?.trim() || "말로컷 AI로 새롭게 편집된 영상입니다"}
-                </p>
-              )}
+          <div className="absolute bottom-16 left-0 w-full px-4 pointer-events-none">
+            <div className="mx-auto w-full max-w-[92%]">
+              <span className="inline-block text-[10px] bg-slate-700/70 text-white px-2 py-0.5 rounded mb-1 font-medium">
+                Preview-only UI · 기존 자막 영역 가리기
+              </span>
+              <div className="w-full min-h-[42px] md:min-h-[52px] bg-black/85 border border-white/20 rounded-md flex items-center justify-center px-4">
+                {editCommand.add_subtitle && (
+                  <p className={`text-white font-bold text-center leading-tight drop-shadow-lg ${
+                    editCommand.subtitle_size === 'large' ? 'text-xl sm:text-2xl md:text-3xl' :
+                    editCommand.subtitle_size === 'small' ? 'text-xs sm:text-sm md:text-base' :
+                    'text-base sm:text-lg md:text-xl'
+                  }`}>
+                    {editCommand.subtitle_text?.trim() || DEFAULT_SUBTITLE}
+                  </p>
+                )}
+              </div>
+              <p className="text-[11px] text-white/80 mt-1 drop-shadow-sm">
+                이 미리보기는 실제 렌더링 전에 적용될 자막 가림/새 자막을 보여줍니다.
+              </p>
             </div>
           </div>
         )}
@@ -259,6 +260,14 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
             videoRef={videoRef}
             videoDuration={duration}
           />
+
+          {clipA && clipB && (
+            <p className="text-sm text-gray-600 mb-3">
+              <span className="font-semibold text-blue-600">A: {clipA.source_start}~{clipA.source_end}초</span>
+              {" · "}
+              <span className="font-semibold text-green-600">B: {clipB.source_start}~{clipB.source_end}초</span>
+            </p>
+          )}
 
           {/* 구간 버튼 */}
           {renderSegmentButtons()}

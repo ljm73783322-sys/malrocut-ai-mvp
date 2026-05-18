@@ -82,10 +82,9 @@ export default function ThumbnailTimeline({
     [videoRef]
   );
 
-  // ── 구간 A/B 매핑 ────────────────────────────────────────────────────
-  const sorted = [...clips].sort((a, b) => a.source_start - b.source_start);
-  const clipA = sorted[0] ?? null;
-  const clipB = sorted[1] ?? null;
+  // ── 구간 A/B 매핑 (단일 기준: clips[0], clips[1]) ────────────────────
+  const clipA = clips[0] ?? null;
+  const clipB = clips[1] ?? null;
 
   const getClipInfo = (time: number) => {
     if (clipA && time >= clipA.source_start && time < clipA.source_end) {
@@ -98,7 +97,11 @@ export default function ThumbnailTimeline({
   };
 
   // ── 재생 헤드 위치 (%) ───────────────────────────────────────────────
-  const headPct = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
+  const safeCurrentTime = Number.isFinite(currentTime) ? currentTime : 0;
+  const headPct = safeDuration > 0
+    ? Math.min(100, Math.max(0, (safeCurrentTime / safeDuration) * 100))
+    : null;
 
   // ── 로딩 상태 ────────────────────────────────────────────────────────
   if (state === "loading") {
@@ -152,7 +155,7 @@ export default function ThumbnailTimeline({
       {/* 썸네일 스크롤 영역 */}
       <div className="relative">
         {/* 재생 헤드 (세로선) */}
-        {duration > 0 && (
+        {headPct !== null && (
           <div
             className="absolute top-0 bottom-0 z-20 pointer-events-none"
             style={{ left: `${headPct}%` }}
@@ -174,7 +177,7 @@ export default function ThumbnailTimeline({
           {thumbs.map((thumb) => {
             const clip = getClipInfo(thumb.time);
             const isCurrent =
-              currentTime >= thumb.time && currentTime < thumb.time + 1;
+              safeCurrentTime >= thumb.time && safeCurrentTime < thumb.time + 1;
 
             return (
               <div

@@ -1,5 +1,6 @@
 "use client";
 import { useRouter } from 'next/navigation';
+import { getDownloadUrl } from '@/lib/api';
 
 export default function ResultPage({ params }: { params: { job_id: string } }) {
   const router = useRouter();
@@ -10,19 +11,19 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
       
       <div className="flex flex-col w-full space-y-6">
         <a 
-          href={`/api/jobs/${params.job_id}/download/video`}
+          href={getDownloadUrl(params.job_id, 'video')}
           className="bg-blue-600 text-white text-3xl font-bold py-6 px-8 rounded-2xl shadow-lg hover:bg-blue-700 text-center"
         >
           📹 완성된 영상 저장하기
         </a>
         <a 
-          href={`/api/jobs/${params.job_id}/download/thumbnail`}
+          href={getDownloadUrl(params.job_id, 'thumbnail')}
           className="bg-orange-500 text-white text-3xl font-bold py-6 px-8 rounded-2xl shadow-lg hover:bg-orange-600 text-center"
         >
           🖼️ 썸네일 사진 저장하기
         </a>
         <a 
-          href={`/api/jobs/${params.job_id}/download/subtitle`}
+          href={getDownloadUrl(params.job_id, 'subtitle')}
           className="bg-gray-600 text-white text-3xl font-bold py-6 px-8 rounded-2xl shadow-lg hover:bg-gray-700 text-center"
         >
           📝 자막 파일 저장하기
