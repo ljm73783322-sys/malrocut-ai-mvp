@@ -66,7 +66,12 @@ async def get_status(job_id: str):
     job = job_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return JobStatus(job_id=job_id, status=job["status"], progress=job["progress"])
+    return JobStatus(
+        job_id=job_id,
+        status=job["status"],
+        progress=job["progress"],
+        error=job.get("error"),
+    )
 
 @router.get("/{job_id}/download/{file_type}")
 async def download_file(job_id: str, file_type: str):

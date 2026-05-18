@@ -28,6 +28,8 @@ interface Segment {
 
 type VideoState = "loading" | "ready" | "error";
 
+const DEFAULT_SUBTITLE = "말로컷 AI로 새롭게 편집된 영상입니다";
+
 export default function TimelinePreview({ jobId, clips = [], editCommand }: TimelinePreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [duration, setDuration] = useState<number>(0);
@@ -207,22 +209,24 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
           onTimeUpdate={handleTimeUpdate}
         />
         
-        {/* ★ CSS 자막 오버레이 (Preview-only UI) */}
+        {/* preview-only 자막 영역 가리기/새 자막 오버레이 */}
         {editCommand && (editCommand.cover_subtitle_area || editCommand.add_subtitle) && (
-          <div className="absolute bottom-[50px] left-0 w-full flex flex-col items-center pointer-events-none">
-            <span className="text-[10px] bg-red-500/80 text-white px-2 py-0.5 rounded mb-1">
-              Preview-only UI (실제 렌더링 시 적용됨)
-            </span>
-            <div className="bg-black w-[80%] h-[15%] min-h-[40px] flex items-center justify-center px-4 rounded-sm">
-              {editCommand.add_subtitle && (
-                <p className={`text-white font-bold text-center ${
-                  editCommand.subtitle_size === 'large' ? 'text-2xl sm:text-3xl' :
-                  editCommand.subtitle_size === 'small' ? 'text-sm sm:text-base' :
-                  'text-lg sm:text-xl'
-                }`}>
-                  {editCommand.subtitle_text?.trim() || "말로컷 AI로 새롭게 편집된 영상입니다"}
-                </p>
-              )}
+          <div className="absolute bottom-14 left-0 w-full px-4 pointer-events-none">
+            <div className="mx-auto w-full max-w-[92%]">
+              <span className="inline-block text-[11px] bg-red-600/90 text-white px-2 py-0.5 rounded mb-1 font-semibold">
+                Preview-only UI · 기존 자막 영역 가리기
+              </span>
+              <div className="w-full min-h-[56px] md:min-h-[68px] bg-black/90 border border-white/20 rounded-md flex items-center justify-center px-4">
+                {editCommand.add_subtitle && (
+                  <p className={`text-white font-bold text-center leading-tight drop-shadow-lg ${
+                    editCommand.subtitle_size === 'large' ? 'text-xl sm:text-2xl md:text-3xl' :
+                    editCommand.subtitle_size === 'small' ? 'text-xs sm:text-sm md:text-base' :
+                    'text-base sm:text-lg md:text-xl'
+                  }`}>
+                    {editCommand.subtitle_text?.trim() || DEFAULT_SUBTITLE}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}

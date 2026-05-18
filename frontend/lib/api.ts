@@ -78,7 +78,15 @@ export const renderVideo = async (jobId: string) => {
 
 // ─── 상태 조회 ────────────────────────────────────────────────────────────
 
-export const getStatus = async (jobId: string) => {
+
+export interface JobStatusResponse {
+  job_id: string;
+  status: string;
+  progress: number;
+  error?: string | null;
+}
+
+export const getStatus = async (jobId: string): Promise<JobStatusResponse> => {
   const res = await api.get(`/jobs/${jobId}/status`);
   return res.data;
 };
@@ -110,3 +118,8 @@ export const getInputVideoUrl = (jobId: string): string =>
 /** 타임라인 썸네일 이미지의 절대 URL (상대 경로를 절대로 변환) */
 export const getThumbnailAbsoluteUrl = (relativeUrl: string): string =>
   `${API_BASE_URL}${relativeUrl}`;
+
+
+/** 결과물 다운로드 URL */
+export const getDownloadUrl = (jobId: string, fileType: "video" | "thumbnail" | "subtitle"): string =>
+  `${API_BASE_URL}/api/jobs/${jobId}/download/${fileType}`;
