@@ -36,6 +36,8 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
   const [videoState, setVideoState] = useState<VideoState>("loading");
   const [activeSegment, setActiveSegment] = useState<Segment | null>(null);
   const [playingLabel, setPlayingLabel] = useState<string>("");
+  const clipA = clips[0] ?? null;
+  const clipB = clips[1] ?? null;
 
   // ── 이벤트 핸들러 ─────────────────────────────────────────────────────
   const handleLoadedMetadata = () => {
@@ -75,16 +77,12 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
 
   // ── 구간 분할 ────────────────────────────────────────────────────────
   const buildSegments = () => {
-    if (clips.length !== 2 || duration === 0) return { original: [], modified: [] };
+    if (!clipA || !clipB || duration === 0) return { original: [], modified: [] };
 
-    const sorted = [...clips].sort((a, b) => a.source_start - b.source_start);
-    const c1 = sorted[0];
-    const c2 = sorted[1];
-
-    const s1 = c1.source_start;
-    const e1 = Math.min(c1.source_end, duration);
-    const s2 = c2.source_start;
-    const e2 = Math.min(c2.source_end, duration);
+    const s1 = clipA.source_start;
+    const e1 = Math.min(clipA.source_end, duration);
+    const s2 = clipB.source_start;
+    const e2 = Math.min(clipB.source_end, duration);
 
     const makeSeg = (start: number, end: number, label: string, color: string, textColor: string): Segment | null => {
       if (end - start > 0.05) {
@@ -95,17 +93,17 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
 
     const original: Segment[] = [
       makeSeg(0, s1, "기본", "#e5e7eb", "#6b7280"),
-      makeSeg(s1, e1, `구간 A (${s1}~${e1}초)`, "#93c5fd", "#1e3a5f"),
+      makeSeg(s1, e1, "A", "#93c5fd", "#1e3a5f"),
       makeSeg(e1, s2, "기본", "#e5e7eb", "#6b7280"),
-      makeSeg(s2, e2, `구간 B (${s2}~${e2}초)`, "#86efac", "#14532d"),
+      makeSeg(s2, e2, "B", "#86efac", "#14532d"),
       makeSeg(e2, duration, "기본", "#e5e7eb", "#6b7280"),
     ].filter(Boolean) as Segment[];
 
     const modified: Segment[] = [
       makeSeg(0, s1, "기본", "#e5e7eb", "#6b7280"),
-      makeSeg(s2, e2, `구간 B → 앞으로`, "#86efac", "#14532d"),
+      makeSeg(s2, e2, "B", "#86efac", "#14532d"),
       makeSeg(e1, s2, "기본", "#e5e7eb", "#6b7280"),
-      makeSeg(s1, e1, `구간 A → 뒤로`, "#93c5fd", "#1e3a5f"),
+      makeSeg(s1, e1, "A", "#93c5fd", "#1e3a5f"),
       makeSeg(e2, duration, "기본", "#e5e7eb", "#6b7280"),
     ].filter(Boolean) as Segment[];
 
@@ -136,9 +134,9 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
                   outline: isActive ? "3px solid #2563eb" : "none",
                   outlineOffset: "-3px",
                 }}
-                title={`${seg.start.toFixed(1)}초 ~ ${seg.end.toFixed(1)}초 클릭하면 재생`}
+                title={`${seg.label} | ${seg.start.toFixed(1)}초 ~ ${seg.end.toFixed(1)}초 클릭하면 재생`}
               >
-                <span className="text-xs sm:text-sm font-bold whitespace-nowrap overflow-hidden px-1">
+                <span className="text-xs sm:text-sm font-bold whitespace-nowrap px-1">
                   {seg.label}
                 </span>
               </div>
@@ -151,21 +149,17 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
 
   // ── 구간 버튼 ────────────────────────────────────────────────────────
   const renderSegmentButtons = () => {
-    if (clips.length !== 2 || duration === 0) return null;
-
-    const sorted = [...clips].sort((a, b) => a.source_start - b.source_start);
-    const c1 = sorted[0];
-    const c2 = sorted[1];
+    if (!clipA || !clipB || duration === 0) return null;
 
     const buttons = [
       {
-        label: `▶ 구간 A (${c1.source_start}~${c1.source_end}초) 보기`,
-        seg: { id: "a", label: "구간 A", start: c1.source_start, end: Math.min(c1.source_end, duration), color: "#93c5fd", textColor: "#1e3a5f" },
+        label: `▶ 구간 A (${clipA.source_start}~${clipA.source_end}초) 보기`,
+        seg: { id: "a", label: "구간 A", start: clipA.source_start, end: Math.min(clipA.source_end, duration), color: "#93c5fd", textColor: "#1e3a5f" },
         bg: "bg-blue-100 hover:bg-blue-200 text-blue-800 border-blue-300",
       },
       {
-        label: `▶ 구간 B (${c2.source_start}~${c2.source_end}초) 보기`,
-        seg: { id: "b", label: "구간 B", start: c2.source_start, end: Math.min(c2.source_end, duration), color: "#86efac", textColor: "#14532d" },
+        label: `▶ 구간 B (${clipB.source_start}~${clipB.source_end}초) 보기`,
+        seg: { id: "b", label: "구간 B", start: clipB.source_start, end: Math.min(clipB.source_end, duration), color: "#86efac", textColor: "#14532d" },
         bg: "bg-green-100 hover:bg-green-200 text-green-800 border-green-300",
       },
     ];
@@ -263,6 +257,14 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
             videoRef={videoRef}
             videoDuration={duration}
           />
+
+          {clipA && clipB && (
+            <p className="text-sm text-gray-600 mb-3">
+              <span className="font-semibold text-blue-600">A: {clipA.source_start}~{clipA.source_end}초</span>
+              {" · "}
+              <span className="font-semibold text-green-600">B: {clipB.source_start}~{clipB.source_end}초</span>
+            </p>
+          )}
 
           {/* 구간 버튼 */}
           {renderSegmentButtons()}
