@@ -28,3 +28,4 @@ tmp/
 *.jpg
 *.png
 *.srt
+backend/storage/

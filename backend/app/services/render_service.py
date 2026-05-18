@@ -4,7 +4,7 @@ render_service.py
 MVP 렌더링 서비스.
 
 FFmpeg가 설치된 경우:
-  - 줌인(1.03×), 밝기/대비 보정, 하단 반투명 검은 박스, 자막 텍스트 삽입
+  - edit_command.json의 zoom/brightness/subtitle 설정을 반영
   - drawtext 실패 시 자막 없이 재시도
 
 FFmpeg가 없거나 모든 시도가 실패한 경우:
@@ -16,6 +16,7 @@ Windows PowerShell 환경에서 안전하게 동작하도록 subprocess 처리.
 """
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -234,26 +235,99 @@ def _get_video_dimensions(video_path: str) -> tuple[int, int]:
     return 1920, 1080
 
 
-def _build_filtergraph_with_text(font_path: str, video_width: int, video_height: int) -> str:
-    """
-    자막 텍스트 포함 filtergraph 문자열 생성.
-    crop 후 원본 해상도로 명시적 scale 복원 포함.
-    """
-    esc_font  = _escape_ffmpeg_path(font_path)
-    font_size = max(48, int(video_height * 0.065))
-    text_y    = f"h*0.90-{font_size // 2}"
-    bar_height = max(100, int(video_height * 0.18))
-    bar_y     = video_height - bar_height
+def _get_video_duration(video_path: str) -> float:
+    """ffprobe로 영상 길이를 조회합니다."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                video_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return float(result.stdout.strip())
+    except Exception:
+        pass
+    return 60.0  # 실패 시 안전한 기본값 (너무 짧게 자르는 것 방지)
 
-    filters = [
-        # 1. 줌인: 중앙 97% 잘라서 원본 해상도로 복원
-        f"crop=iw/1.03:ih/1.03,scale={video_width}:{video_height}",
-        # 2. 밝기/대비/채도 보정
-        "eq=brightness=0.06:contrast=1.05:saturation=1.1",
-        # 3. 하단 반투명 검은 박스
-        f"drawbox=x=0:y={bar_y}:w=iw:h={bar_height}:color=black@0.70:t=fill",
-        # 4. 자막 텍스트
-        (
+
+def _load_edit_command(job_dir: str) -> dict:
+    """
+    edit_command.json을 읽어서 edit_command dict를 반환합니다.
+    파일이 없거나 읽기 실패 시 기본값을 반환합니다.
+    """
+    default = {
+        "add_subtitle": True,
+        "cover_subtitle_area": True,
+        "subtitle_size": "large",
+        "subtitle_language": "ko",
+        "zoom": 1.03,
+        "brightness": 0.06,
+        "contrast": 1.05,
+        "cut_silence": False,
+    }
+    cmd_path = os.path.join(job_dir, "edit_command.json")
+    if not os.path.exists(cmd_path):
+        return default
+    try:
+        with open(cmd_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cmd = data.get("edit_command", {})
+        # 누락된 키는 기본값으로 채움
+        for k, v in default.items():
+            cmd.setdefault(k, v)
+        return cmd
+    except Exception as exc:
+        print(f"[render_service] edit_command.json 읽기 실패: {exc}", file=sys.stderr)
+        return default
+
+
+def _build_filtergraph_with_text(
+    font_path: str,
+    video_width: int,
+    video_height: int,
+    cmd: dict,
+) -> str:
+    """
+    edit_command의 zoom/brightness/cover_subtitle_area 값을 반영하여
+    자막 텍스트 포함 filtergraph 문자열을 생성합니다.
+    """
+    esc_font   = _escape_ffmpeg_path(font_path)
+    font_size  = max(48, int(video_height * 0.065))
+    text_y     = f"h*0.90-{font_size // 2}"
+    bar_height = max(100, int(video_height * 0.18))
+    bar_y      = video_height - bar_height
+
+    zoom       = float(cmd.get("zoom") or 1.03)
+    # brightness=None → 사용자 미요청, 렌더링 시 기본값(0.06) 적용
+    brightness = float(cmd["brightness"]) if cmd.get("brightness") is not None else 0.06
+    contrast   = float(cmd["contrast"])   if cmd.get("contrast")   is not None else 1.05
+    cover_box  = cmd.get("cover_subtitle_area", True)
+    add_text   = cmd.get("add_subtitle", True)
+
+    filters = []
+
+    # 1. 줌인 (zoom > 1.0 일 때만 crop)
+    if zoom > 1.0:
+        filters.append(f"crop=iw/{zoom}:ih/{zoom},scale={video_width}:{video_height}")
+
+    # 2. 밝기/대비/채도 보정
+    filters.append(f"eq=brightness={brightness}:contrast={contrast}:saturation=1.1")
+
+    # 3. 하단 반투명 검은 박스
+    if cover_box:
+        filters.append(
+            f"drawbox=x=0:y={bar_y}:w=iw:h={bar_height}:color=black@0.70:t=fill"
+        )
+
+    # 4. 자막 텍스트
+    if add_text:
+        filters.append(
             f"drawtext=fontfile='{esc_font}'"
             f":text='{SUBTITLE_TEXT}'"
             f":fontsize={font_size}"
@@ -262,12 +336,16 @@ def _build_filtergraph_with_text(font_path: str, video_width: int, video_height:
             f":bordercolor=black"
             f":x=(w-text_w)/2"
             f":y={text_y}"
-        ),
-    ]
-    return ",".join(filters)
+        )
+
+    return ",".join(filters) if filters else "null"
 
 
-def _build_filtergraph_no_text(video_width: int, video_height: int) -> str:
+def _build_filtergraph_no_text(
+    video_width: int,
+    video_height: int,
+    cmd: dict,
+) -> str:
     """
     자막 없이 줌인 + 보정 + 박스만 적용하는 filtergraph.
     drawtext 실패 시 fallback으로 사용.
@@ -275,17 +353,91 @@ def _build_filtergraph_no_text(video_width: int, video_height: int) -> str:
     bar_height = max(100, int(video_height * 0.18))
     bar_y      = video_height - bar_height
 
-    filters = [
-        f"crop=iw/1.03:ih/1.03,scale={video_width}:{video_height}",
-        "eq=brightness=0.06:contrast=1.05:saturation=1.1",
-        f"drawbox=x=0:y={bar_y}:w=iw:h={bar_height}:color=black@0.70:t=fill",
-    ]
-    return ",".join(filters)
+    zoom       = float(cmd.get("zoom") or 1.03)
+    brightness = float(cmd["brightness"]) if cmd.get("brightness") is not None else 0.06
+    contrast   = float(cmd["contrast"])   if cmd.get("contrast")   is not None else 1.05
+    cover_box  = cmd.get("cover_subtitle_area", True)
+
+    filters = []
+    if zoom > 1.0:
+        filters.append(f"crop=iw/{zoom}:ih/{zoom},scale={video_width}:{video_height}")
+    filters.append(f"eq=brightness={brightness}:contrast={contrast}:saturation=1.1")
+    if cover_box:
+        filters.append(
+            f"drawbox=x=0:y={bar_y}:w=iw:h={bar_height}:color=black@0.70:t=fill"
+        )
+    return ",".join(filters) if filters else "null"
 
 
-def _ffmpeg_render(input_path: str, output_path: str, video_width: int, video_height: int) -> bool:
+def _build_reorder_filtergraph(base_vf: str, duration: float, clip_reorder: dict) -> str:
     """
-    FFmpeg로 영상을 렌더링합니다.
+    기본 vf(zoom, drawbox 등)를 적용한 비디오와 원본 오디오를
+    여러 구간으로 자른 뒤, 요청된 순서대로 이어붙이는 filter_complex 문자열을 생성합니다.
+    """
+    clips = clip_reorder.get("clips", [])
+    if len(clips) != 2:
+        return ""
+    
+    sorted_clips = sorted(clips, key=lambda c: c["source_start"])
+    c1, c2 = sorted_clips[0], sorted_clips[1]
+    
+    s1, e1 = float(c1["source_start"]), float(c1["source_end"])
+    s2, e2 = float(c2["source_start"]), float(c2["source_end"])
+    
+    # duration을 넘지 않도록 제한
+    e2 = min(e2, duration)
+    if e2 <= s2:
+        return ""
+
+    # 잘라낼 구간 정의 (순서대로)
+    segments = [
+        (0.0, s1),
+        (s2, e2),  # 순서 바뀜: 뒷부분
+        (e1, s2),
+        (s1, e1),  # 순서 바뀜: 앞부분
+        (e2, duration)
+    ]
+    
+    valid_segments = []
+    for s, e in segments:
+        if e - s > 0.1:  # 0.1초 이상인 구간만 포함 (빈 구간 방지)
+            valid_segments.append((s, e))
+            
+    if not valid_segments:
+        return ""
+        
+    fg = []
+    if base_vf and base_vf != "null":
+        fg.append(f"[0:v]{base_vf}[v_base]")
+        v_in = "v_base"
+    else:
+        v_in = "0:v"
+        
+    concat_inputs = []
+    for i, (s, e) in enumerate(valid_segments):
+        # Video
+        fg.append(f"[{v_in}]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}]")
+        # Audio
+        fg.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
+        concat_inputs.append(f"[v{i}][a{i}]")
+        
+    n = len(valid_segments)
+    concat_str = "".join(concat_inputs)
+    fg.append(f"{concat_str}concat=n={n}:v=1:a=1[outv][outa]")
+    
+    return ";".join(fg)
+
+
+def _ffmpeg_render(
+    input_path: str,
+    output_path: str,
+    video_width: int,
+    video_height: int,
+    duration: float,
+    cmd: dict,
+) -> bool:
+    """
+    FFmpeg로 영상을 렌더링합니다. edit_command의 설정을 반영합니다.
 
     시도 순서:
     1. 자막(drawtext) 포함 filtergraph + 한글 폰트
@@ -293,6 +445,8 @@ def _ffmpeg_render(input_path: str, output_path: str, video_width: int, video_he
     3. 모두 실패 시 False 반환
     """
     font_path = _find_korean_font()
+    cr = cmd.get("clip_reorder", {})
+    use_reorder = cr.get("enabled", False)
 
     base_args = [
         "ffmpeg", "-y",
@@ -304,17 +458,33 @@ def _ffmpeg_render(input_path: str, output_path: str, video_width: int, video_he
         "-b:a", "128k",
     ]
 
+    def _try_render(vf_str: str) -> bool:
+        if use_reorder:
+            fc = _build_reorder_filtergraph(vf_str, duration, cr)
+            if fc:
+                args = base_args.copy()
+                args.extend(["-filter_complex", fc, "-map", "[outv]", "-map", "[outa]", output_path])
+                return _run_ffmpeg(args)
+        # reorder 안 할 때
+        if vf_str != "null":
+            return _run_ffmpeg(base_args + ["-vf", vf_str, output_path])
+        return False
+
     # 시도 1: 자막 포함
     if font_path:
-        vf = _build_filtergraph_with_text(font_path, video_width, video_height)
-        if _run_ffmpeg(base_args + ["-vf", vf, output_path]):
+        vf = _build_filtergraph_with_text(font_path, video_width, video_height, cmd)
+        if _try_render(vf):
             return True
-        # 출력 파일이 깨진 경우 삭제
         _remove_if_invalid(output_path)
 
     # 시도 2: 자막 없음
-    vf = _build_filtergraph_no_text(video_width, video_height)
-    if _run_ffmpeg(base_args + ["-vf", vf, output_path]):
+    vf = _build_filtergraph_no_text(video_width, video_height, cmd)
+    if _try_render(vf):
+        return True
+    _remove_if_invalid(output_path)
+
+    # 시도 3: 필터 없이 단순 재인코딩 (reorder도 무시됨)
+    if _run_ffmpeg(base_args + [output_path]):
         return True
     _remove_if_invalid(output_path)
 
@@ -352,6 +522,10 @@ async def render_video_mock(job_id: str):
     thumbnail_path    = os.path.join(job_dir, "thumbnail.jpg")
     subtitle_path     = os.path.join(job_dir, "subtitle.srt")
 
+    # ── edit_command.json 로드 ─────────────────────────────────────────────
+    cmd = _load_edit_command(job_dir)
+    print(f"[render_service] edit_command 적용: {cmd}", file=sys.stderr)
+
     has_ffmpeg = shutil.which("ffmpeg") is not None
 
     # ── 비디오 렌더링 ──────────────────────────────────────────────────────
@@ -361,10 +535,11 @@ async def render_video_mock(job_id: str):
 
         if has_ffmpeg:
             width, height = _get_video_dimensions(input_path)
+            duration = _get_video_duration(input_path)
             update_job_status(job_id, "rendering", 25)
 
             rendered_with_effects = _ffmpeg_render(
-                input_path, output_video_path, width, height
+                input_path, output_video_path, width, height, duration, cmd
             )
             update_job_status(job_id, "rendering", 60)
 

@@ -48,8 +48,9 @@ async def edit_job(job_id: str, req: EditRequest):
     job = job_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    plan = edit_service.create_edit_plan_mock(job_id, req.prompt)
-    return {"plan": plan}
+    # create_edit_plan_mock returns { job_id, prompt, edit_command, plan_items }
+    result = edit_service.create_edit_plan_mock(job_id, req.prompt)
+    return result
 
 @router.post("/{job_id}/render")
 async def render_job(job_id: str, background_tasks: BackgroundTasks):
@@ -73,8 +74,10 @@ async def download_file(job_id: str, file_type: str):
     
     filename_map = {
         "video": "edited_video.mp4",
+        "original_video": "input.mp4",
         "thumbnail": "thumbnail.jpg",
-        "subtitle": "subtitle.srt"
+        "subtitle": "subtitle.srt",
+        "original_subtitle": "subtitle_original.srt"
     }
     
     if file_type not in filename_map:
@@ -84,5 +87,5 @@ async def download_file(job_id: str, file_type: str):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not ready")
         
-    media_type = "video/mp4" if file_type == "video" else "image/jpeg" if file_type == "thumbnail" else "text/plain"
+    media_type = "video/mp4" if "video" in file_type else "image/jpeg" if file_type == "thumbnail" else "text/plain"
     return FileResponse(path=file_path, filename=filename_map[file_type], media_type=media_type)
