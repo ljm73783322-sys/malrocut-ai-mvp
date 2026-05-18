@@ -7,15 +7,17 @@ FFmpeg가 설치된 경우:
   - edit_command.json의 zoom/brightness/subtitle 설정을 반영
   - drawtext 실패 시 자막 없이 재시도
 
-FFmpeg가 없거나 모든 시도가 실패한 경우:
-  - input.mp4를 edited_video.mp4로 복사 (재생 가능 보장)
+FFmpeg가 없거나 렌더링이 실패한 경우:
+  - 실제 편집 명령이 있으면 failed 상태와 job.json 메타데이터를 저장
+  - 실제 편집 명령이 없을 때만 input.mp4를 edited_video.mp4로 복사
 
-결과 파일이 1 KB 미만이면 job 상태를 'failed'로 저장.
+결과 파일이 1 KB 미만이거나 편집 결과가 원본과 동일하면 job 상태를 'failed'로 저장.
 
 Windows PowerShell 환경에서 안전하게 동작하도록 subprocess 처리.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -60,6 +62,61 @@ def _subtitle_font_scale(cmd: dict) -> float:
     if size == "large":
         return 0.070
     return 0.060
+
+
+def _has_effective_edits(cmd: dict) -> bool:
+    """실제 영상 변경이 발생해야 하는 편집 명령이 있는지 판단합니다."""
+    clip_reorder = cmd.get("clip_reorder") or {}
+    if clip_reorder.get("enabled") and len(clip_reorder.get("clips", [])) >= 2:
+        return True
+    if cmd.get("cover_subtitle_area"):
+        return True
+    if cmd.get("add_subtitle"):
+        return True
+    if (cmd.get("brightness") is not None) or (cmd.get("contrast") is not None):
+        return True
+    if float(cmd.get("zoom") or 1.0) > 1.0:
+        return True
+    return False
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _write_job_metadata(
+    job_id: str,
+    status: str,
+    progress: int,
+    error: str | None,
+    input_path: str,
+    output_path: str,
+    thumbnail_path: str,
+    subtitle_path: str,
+    edit_command_path: str,
+):
+    job_dir = get_job_dir(job_id)
+    job_json_path = os.path.join(job_dir, "job.json")
+    payload = {
+        "job_id": job_id,
+        "status": status,
+        "progress": progress,
+        "error": error,
+        "input_path": input_path,
+        "output_path": output_path,
+        "thumbnail_path": thumbnail_path,
+        "subtitle_path": subtitle_path,
+        "edit_command_path": edit_command_path,
+    }
+    with open(job_json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +563,13 @@ def _ffmpeg_render(
         return True
     _remove_if_invalid(output_path)
 
-    # 시도 3: 필터 없이 단순 재인코딩 (reorder도 무시됨)
+    # 시도 3: 실제 편집 명령이 없을 때만 필터 없이 단순 재인코딩을 허용합니다.
+    # clip_reorder 등 편집 명령이 있는데 여기까지 왔다면 효과 적용 렌더링이 실패한
+    # 것이므로, 재인코딩 결과를 completed로 오인하지 않도록 False를 반환합니다.
+    if _has_effective_edits(cmd):
+        _remove_if_invalid(output_path)
+        return False
+
     ok = _run_ffmpeg(base_args + [output_path])
     if ok and _is_valid_video(output_path):
         return True
@@ -545,10 +608,12 @@ async def render_video_mock(job_id: str):
     output_video_path = os.path.join(job_dir, "edited_video.mp4")
     thumbnail_path    = os.path.join(job_dir, "thumbnail.jpg")
     subtitle_path     = os.path.join(job_dir, "subtitle.srt")
+    edit_command_path = os.path.join(job_dir, "edit_command.json")
 
     # ── edit_command.json 로드 ─────────────────────────────────────────────
     cmd = _load_edit_command(job_dir)
     print(f"[render_service] edit_command 적용: {cmd}", file=sys.stderr)
+    has_effective_edits = _has_effective_edits(cmd)
 
     has_ffmpeg = shutil.which("ffmpeg") is not None
 
@@ -567,31 +632,92 @@ async def render_video_mock(job_id: str):
             )
             update_job_status(job_id, "rendering", 60)
 
-        # FFmpeg 없거나 렌더링 실패 → 원본 복사 (재생 가능 보장)
+        # FFmpeg 없거나 렌더링 실패
         if not rendered_with_effects:
-            print(
-                "[render_service] FFmpeg 렌더링 없음 → input.mp4 복사 fallback.",
-                file=sys.stderr,
-            )
+            if has_effective_edits:
+                fail_job(job_id, "FFmpeg rendering failed while edit commands are present.")
+                _write_job_metadata(
+                    job_id=job_id,
+                    status="failed",
+                    progress=0,
+                    error="FFmpeg rendering failed while edit commands are present.",
+                    input_path=input_path,
+                    output_path=output_video_path,
+                    thumbnail_path=thumbnail_path,
+                    subtitle_path=subtitle_path,
+                    edit_command_path=edit_command_path,
+                )
+                return
+            # 편집 명령이 없을 때만 복사 fallback 허용
+            print("[render_service] 편집 명령 없음 → input.mp4 복사 fallback.", file=sys.stderr)
             _remove_if_invalid(output_video_path)
             try:
                 shutil.copy2(input_path, output_video_path)
             except Exception as exc:
                 fail_job(job_id, f"원본 복사 fallback 실패: {exc}")
+                _write_job_metadata(
+                    job_id=job_id,
+                    status="failed",
+                    progress=0,
+                    error=f"원본 복사 fallback 실패: {exc}",
+                    input_path=input_path,
+                    output_path=output_video_path,
+                    thumbnail_path=thumbnail_path,
+                    subtitle_path=subtitle_path,
+                    edit_command_path=edit_command_path,
+                )
                 return
 
         # 결과 파일 크기 검증
         if not _is_valid_video(output_video_path):
+            err = "edited_video.mp4가 1KB 미만입니다. 원본 파일을 확인하세요."
             fail_job(
                 job_id,
-                "edited_video.mp4가 1KB 미만입니다. 원본 파일을 확인하세요."
+                err
+            )
+            _write_job_metadata(
+                job_id=job_id, status="failed", progress=0, error=err,
+                input_path=input_path, output_path=output_video_path,
+                thumbnail_path=thumbnail_path, subtitle_path=subtitle_path,
+                edit_command_path=edit_command_path
             )
             return
 
     else:
         # input.mp4 자체가 없음
-        fail_job(job_id, "input.mp4가 존재하지 않습니다.")
+        err = "input.mp4가 존재하지 않습니다."
+        fail_job(job_id, err)
+        _write_job_metadata(
+            job_id=job_id, status="failed", progress=0, error=err,
+            input_path=input_path, output_path=output_video_path,
+            thumbnail_path=thumbnail_path, subtitle_path=subtitle_path,
+            edit_command_path=edit_command_path
+        )
         return
+
+    # 편집 명령이 있는데 결과가 원본과 동일하면 실패 처리
+    if has_effective_edits and _is_valid_video(input_path) and _is_valid_video(output_video_path):
+        try:
+            if _sha256_file(input_path) == _sha256_file(output_video_path):
+                err = "Rendered output is identical to input despite edit commands"
+                fail_job(job_id, err)
+                _write_job_metadata(
+                    job_id=job_id, status="failed", progress=0, error=err,
+                    input_path=input_path, output_path=output_video_path,
+                    thumbnail_path=thumbnail_path, subtitle_path=subtitle_path,
+                    edit_command_path=edit_command_path
+                )
+                return
+        except Exception as exc:
+            err = f"출력 무결성 검사 실패: {exc}"
+            fail_job(job_id, err)
+            _write_job_metadata(
+                job_id=job_id, status="failed", progress=0, error=err,
+                input_path=input_path, output_path=output_video_path,
+                thumbnail_path=thumbnail_path, subtitle_path=subtitle_path,
+                edit_command_path=edit_command_path
+            )
+            return
 
     update_job_status(job_id, "rendering", 70)
 
@@ -599,7 +725,14 @@ async def render_video_mock(job_id: str):
     _ensure_valid_thumbnail(thumbnail_path, input_path)
 
     if not _is_valid_thumbnail(thumbnail_path):
-        fail_job(job_id, "thumbnail.jpg 생성 실패: 유효한 JPG를 만들지 못했습니다.")
+        err = "thumbnail.jpg 생성 실패: 유효한 JPG를 만들지 못했습니다."
+        fail_job(job_id, err)
+        _write_job_metadata(
+            job_id=job_id, status="failed", progress=0, error=err,
+            input_path=input_path, output_path=output_video_path,
+            thumbnail_path=thumbnail_path, subtitle_path=subtitle_path,
+            edit_command_path=edit_command_path
+        )
         return
 
     update_job_status(job_id, "rendering", 85)
@@ -615,11 +748,25 @@ async def render_video_mock(job_id: str):
                 "\n"
             )
     except Exception as exc:
-        fail_job(job_id, f"subtitle.srt 생성 실패: {exc}")
+        err = f"subtitle.srt 생성 실패: {exc}"
+        fail_job(job_id, err)
+        _write_job_metadata(
+            job_id=job_id, status="failed", progress=0, error=err,
+            input_path=input_path, output_path=output_video_path,
+            thumbnail_path=thumbnail_path, subtitle_path=subtitle_path,
+            edit_command_path=edit_command_path
+        )
         return
 
     if (not os.path.exists(subtitle_path)) or os.path.getsize(subtitle_path) < 20:
-        fail_job(job_id, "subtitle.srt가 비어 있거나 손상되었습니다.")
+        err = "subtitle.srt가 비어 있거나 손상되었습니다."
+        fail_job(job_id, err)
+        _write_job_metadata(
+            job_id=job_id, status="failed", progress=0, error=err,
+            input_path=input_path, output_path=output_video_path,
+            thumbnail_path=thumbnail_path, subtitle_path=subtitle_path,
+            edit_command_path=edit_command_path
+        )
         return
 
     # ── 완료 ──────────────────────────────────────────────────────────────
@@ -628,3 +775,9 @@ async def render_video_mock(job_id: str):
         update_job_status(job_id, "rendering", i * 10)
 
     update_job_status(job_id, "completed", 100)
+    _write_job_metadata(
+        job_id=job_id, status="completed", progress=100, error=None,
+        input_path=input_path, output_path=output_video_path,
+        thumbnail_path=thumbnail_path, subtitle_path=subtitle_path,
+        edit_command_path=edit_command_path
+    )

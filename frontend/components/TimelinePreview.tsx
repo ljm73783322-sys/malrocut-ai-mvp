@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { getInputVideoUrl } from "@/lib/api";
 import ThumbnailTimeline from "@/components/ThumbnailTimeline";
 
@@ -36,8 +36,12 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
   const [videoState, setVideoState] = useState<VideoState>("loading");
   const [activeSegment, setActiveSegment] = useState<Segment | null>(null);
   const [playingLabel, setPlayingLabel] = useState<string>("");
-  const clipA = clips[0] ?? null;
-  const clipB = clips[1] ?? null;
+  const orderedClips = useMemo(
+    () => [...clips].sort((a, b) => a.source_start - b.source_start),
+    [clips]
+  );
+  const clipA = orderedClips[0] ?? null;
+  const clipB = orderedClips[1] ?? null;
 
   // ── 이벤트 핸들러 ─────────────────────────────────────────────────────
   const handleLoadedMetadata = () => {
@@ -205,12 +209,12 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
         
         {/* preview-only 자막 영역 가리기/새 자막 오버레이 */}
         {editCommand && (editCommand.cover_subtitle_area || editCommand.add_subtitle) && (
-          <div className="absolute bottom-14 left-0 w-full px-4 pointer-events-none">
+          <div className="absolute bottom-16 left-0 w-full px-4 pointer-events-none">
             <div className="mx-auto w-full max-w-[92%]">
-              <span className="inline-block text-[11px] bg-red-600/90 text-white px-2 py-0.5 rounded mb-1 font-semibold">
+              <span className="inline-block text-[10px] bg-slate-700/70 text-white px-2 py-0.5 rounded mb-1 font-medium">
                 Preview-only UI · 기존 자막 영역 가리기
               </span>
-              <div className="w-full min-h-[56px] md:min-h-[68px] bg-black/90 border border-white/20 rounded-md flex items-center justify-center px-4">
+              <div className="w-full min-h-[42px] md:min-h-[52px] bg-black/85 border border-white/20 rounded-md flex items-center justify-center px-4">
                 {editCommand.add_subtitle && (
                   <p className={`text-white font-bold text-center leading-tight drop-shadow-lg ${
                     editCommand.subtitle_size === 'large' ? 'text-xl sm:text-2xl md:text-3xl' :
@@ -221,6 +225,9 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
                   </p>
                 )}
               </div>
+              <p className="text-[11px] text-white/80 mt-1 drop-shadow-sm">
+                이 미리보기는 실제 렌더링 전에 적용될 자막 가림/새 자막을 보여줍니다.
+              </p>
             </div>
           </div>
         )}
@@ -253,7 +260,7 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
           {/* ★ 썸네일 타임라인 */}
           <ThumbnailTimeline
             jobId={jobId}
-            clips={clips}
+            clips={orderedClips}
             videoRef={videoRef}
             videoDuration={duration}
           />
