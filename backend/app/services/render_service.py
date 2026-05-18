@@ -7,10 +7,11 @@ FFmpeg가 설치된 경우:
   - edit_command.json의 zoom/brightness/subtitle 설정을 반영
   - drawtext 실패 시 자막 없이 재시도
 
-FFmpeg가 없거나 모든 시도가 실패한 경우:
-  - input.mp4를 edited_video.mp4로 복사 (재생 가능 보장)
+FFmpeg가 없거나 렌더링이 실패한 경우:
+  - 실제 편집 명령이 있으면 failed 상태와 job.json 메타데이터를 저장
+  - 실제 편집 명령이 없을 때만 input.mp4를 edited_video.mp4로 복사
 
-결과 파일이 1 KB 미만이면 job 상태를 'failed'로 저장.
+결과 파일이 1 KB 미만이거나 편집 결과가 원본과 동일하면 job 상태를 'failed'로 저장.
 
 Windows PowerShell 환경에서 안전하게 동작하도록 subprocess 처리.
 """
