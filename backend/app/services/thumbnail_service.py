@@ -26,6 +26,21 @@ THUMB_HEIGHT = 90
 MIN_VALID_BYTES = 1024
 
 
+def _is_valid_thumbnail(path: str) -> bool:
+    if not os.path.exists(path) or os.path.getsize(path) < MIN_VALID_BYTES:
+        return False
+    if HAS_PILLOW:
+        try:
+            with Image.open(path) as img:
+                img.verify()
+            with Image.open(path) as img:
+                w, h = img.size
+                return w > 10 and h > 10
+        except Exception:
+            return False
+    return True
+
+
 def _get_video_duration(video_path: str) -> float:
     """
     영상 길이를 초 단위로 반환합니다.
@@ -172,6 +187,17 @@ def _generate_thumbnails_pillow(out_dir: str, duration: float) -> bool:
     return True
 
 
+def _cleanup_invalid_thumbnails(out_dir: str):
+    for f in os.listdir(out_dir):
+        if f.startswith("thumb_") and f.endswith(".jpg"):
+            p = os.path.join(out_dir, f)
+            if not _is_valid_thumbnail(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+
 def generate_timeline_thumbnails(job_id: str) -> dict:
     """
     타임라인 썸네일을 생성하고 메타데이터를 반환합니다.
@@ -189,12 +215,14 @@ def generate_timeline_thumbnails(job_id: str) -> dict:
     thumbs_dir = os.path.join(job_dir, "thumbnails")
     os.makedirs(thumbs_dir, exist_ok=True)
 
+    _cleanup_invalid_thumbnails(thumbs_dir)
+
     # 이미 생성된 썸네일이 있으면 스킵
     existing = [f for f in os.listdir(thumbs_dir) if f.startswith("thumb_") and f.endswith(".jpg")]
     duration = _get_video_duration(input_path) if os.path.exists(input_path) else 0.0
 
     if len(existing) >= 1 and all(
-        os.path.getsize(os.path.join(thumbs_dir, f)) >= MIN_VALID_BYTES
+        _is_valid_thumbnail(os.path.join(thumbs_dir, f))
         for f in existing[:3]  # 처음 3개만 검증
     ):
         count = len(existing)
@@ -222,6 +250,8 @@ def generate_timeline_thumbnails(job_id: str) -> dict:
     # FFmpeg 실패 시 Pillow fallback
     if not success:
         _generate_thumbnails_pillow(thumbs_dir, duration)
+
+    _cleanup_invalid_thumbnails(thumbs_dir)
 
     # 최종 카운트
     final_files = sorted([

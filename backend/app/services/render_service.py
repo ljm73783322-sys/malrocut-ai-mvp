@@ -48,6 +48,20 @@ KOREAN_FONT_CANDIDATES = [
 ]
 
 
+def _subtitle_text_from_cmd(cmd: dict) -> str:
+    text = (cmd.get("subtitle_text") or "").strip()
+    return text or SUBTITLE_TEXT
+
+
+def _subtitle_font_scale(cmd: dict) -> float:
+    size = str(cmd.get("subtitle_size") or "large").lower()
+    if size == "small":
+        return 0.045
+    if size == "large":
+        return 0.070
+    return 0.060
+
+
 # ---------------------------------------------------------------------------
 # Font helpers
 # ---------------------------------------------------------------------------
@@ -298,8 +312,8 @@ def _build_filtergraph_with_text(
     자막 텍스트 포함 filtergraph 문자열을 생성합니다.
     """
     esc_font   = _escape_ffmpeg_path(font_path)
-    font_size  = max(48, int(video_height * 0.065))
-    text_y     = f"h*0.90-{font_size // 2}"
+    font_size  = max(28, int(video_height * _subtitle_font_scale(cmd)))
+    text_y     = f"h-{max(14, int(video_height * 0.03))}-{font_size}"
     bar_height = max(100, int(video_height * 0.18))
     bar_y      = video_height - bar_height
 
@@ -309,6 +323,7 @@ def _build_filtergraph_with_text(
     contrast   = float(cmd["contrast"])   if cmd.get("contrast")   is not None else 1.05
     cover_box  = cmd.get("cover_subtitle_area", True)
     add_text   = cmd.get("add_subtitle", True)
+    subtitle_text = _subtitle_text_from_cmd(cmd).replace("'", "\\'")
 
     filters = []
 
@@ -329,7 +344,7 @@ def _build_filtergraph_with_text(
     if add_text:
         filters.append(
             f"drawtext=fontfile='{esc_font}'"
-            f":text='{SUBTITLE_TEXT}'"
+            f":text='{subtitle_text}'"
             f":fontsize={font_size}"
             f":fontcolor=white"
             f":borderw=3"
@@ -464,10 +479,18 @@ def _ffmpeg_render(
             if fc:
                 args = base_args.copy()
                 args.extend(["-filter_complex", fc, "-map", "[outv]", "-map", "[outa]", output_path])
-                return _run_ffmpeg(args)
+                ok = _run_ffmpeg(args)
+                if ok and _is_valid_video(output_path):
+                    return True
+                _remove_if_invalid(output_path)
+                return False
         # reorder 안 할 때
         if vf_str != "null":
-            return _run_ffmpeg(base_args + ["-vf", vf_str, output_path])
+            ok = _run_ffmpeg(base_args + ["-vf", vf_str, output_path])
+            if ok and _is_valid_video(output_path):
+                return True
+            _remove_if_invalid(output_path)
+            return False
         return False
 
     # 시도 1: 자막 포함
@@ -484,7 +507,8 @@ def _ffmpeg_render(
     _remove_if_invalid(output_path)
 
     # 시도 3: 필터 없이 단순 재인코딩 (reorder도 무시됨)
-    if _run_ffmpeg(base_args + [output_path]):
+    ok = _run_ffmpeg(base_args + [output_path])
+    if ok and _is_valid_video(output_path):
         return True
     _remove_if_invalid(output_path)
 
@@ -549,7 +573,12 @@ async def render_video_mock(job_id: str):
                 "[render_service] FFmpeg 렌더링 없음 → input.mp4 복사 fallback.",
                 file=sys.stderr,
             )
-            shutil.copy2(input_path, output_video_path)
+            _remove_if_invalid(output_video_path)
+            try:
+                shutil.copy2(input_path, output_video_path)
+            except Exception as exc:
+                fail_job(job_id, f"원본 복사 fallback 실패: {exc}")
+                return
 
         # 결과 파일 크기 검증
         if not _is_valid_video(output_video_path):
@@ -569,23 +598,29 @@ async def render_video_mock(job_id: str):
     # ── 썸네일 생성 ────────────────────────────────────────────────────────
     _ensure_valid_thumbnail(thumbnail_path, input_path)
 
-    # thumbnail도 깨진 경우 → 경고만 (렌더링 자체는 성공)
     if not _is_valid_thumbnail(thumbnail_path):
-        print(
-            "[render_service] thumbnail.jpg 생성 실패 — Pillow가 설치되어 있는지 확인하세요.",
-            file=sys.stderr,
-        )
+        fail_job(job_id, "thumbnail.jpg 생성 실패: 유효한 JPG를 만들지 못했습니다.")
+        return
 
     update_job_status(job_id, "rendering", 85)
 
     # ── 자막 파일 (SRT) ────────────────────────────────────────────────────
-    with open(subtitle_path, "w", encoding="utf-8") as f:
-        f.write(
-            "1\n"
-            "00:00:00,000 --> 00:00:05,000\n"
-            f"{SUBTITLE_TEXT}\n"
-            "\n"
-        )
+    subtitle_text = _subtitle_text_from_cmd(cmd)
+    try:
+        with open(subtitle_path, "w", encoding="utf-8") as f:
+            f.write(
+                "1\n"
+                "00:00:00,000 --> 00:00:05,000\n"
+                f"{subtitle_text}\n"
+                "\n"
+            )
+    except Exception as exc:
+        fail_job(job_id, f"subtitle.srt 생성 실패: {exc}")
+        return
+
+    if (not os.path.exists(subtitle_path)) or os.path.getsize(subtitle_path) < 20:
+        fail_job(job_id, "subtitle.srt가 비어 있거나 손상되었습니다.")
+        return
 
     # ── 완료 ──────────────────────────────────────────────────────────────
     for i in range(9, 11):
