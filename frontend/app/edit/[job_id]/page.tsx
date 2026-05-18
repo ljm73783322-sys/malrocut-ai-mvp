@@ -9,6 +9,7 @@ import SubtitleCompare from '@/components/SubtitleCompare';
 interface EditCommand {
   add_subtitle: boolean;
   cover_subtitle_area: boolean;
+  subtitle_text?: string;
   subtitle_size: string;
   subtitle_language: string;
   zoom: number;
@@ -84,18 +85,18 @@ export default function EditPage({ params }: { params: { job_id: string } }) {
           ))}
         </div>
 
-        {/* 클립 순서 변경 시 타임라인 프리뷰 표시 */}
-        {result.edit_command.clip_reorder?.enabled && (
-          <TimelinePreview 
-            jobId={params.job_id} 
-            clips={result.edit_command.clip_reorder.clips} 
-          />
-        )}
+        {/* 타임라인 프리뷰 및 자막 오버레이 표시 */}
+        <TimelinePreview 
+          jobId={params.job_id} 
+          clips={result.edit_command.clip_reorder?.enabled ? result.edit_command.clip_reorder.clips : undefined}
+          editCommand={result.edit_command}
+        />
 
         {/* 자막 비교 표시 */}
         <SubtitleCompare
           jobId={params.job_id}
           addSubtitle={result.edit_command.add_subtitle}
+          subtitleText={result.edit_command.subtitle_text}
           subtitleSize={result.edit_command.subtitle_size}
           subtitleLanguage={result.edit_command.subtitle_language}
         />

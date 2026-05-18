@@ -27,7 +27,11 @@ MIN_VALID_BYTES = 1024
 
 
 def _get_video_duration(video_path: str) -> float:
-    """ffprobe로 영상 길이를 초 단위로 반환합니다."""
+    """
+    영상 길이를 초 단위로 반환합니다.
+    1차: ffprobe  →  2차: ffmpeg -i stderr 파싱  →  실패 시 0.0
+    """
+    # ── 1차: ffprobe ──────────────────────────────────────────────────────
     try:
         result = subprocess.run(
             [
@@ -41,9 +45,34 @@ def _get_video_duration(video_path: str) -> float:
             text=True,
             timeout=15,
         )
-        return float(result.stdout.strip())
-    except Exception:
-        pass
+        val = result.stdout.strip()
+        if val:
+            d = float(val)
+            if d > 0:
+                return d
+    except Exception as exc:
+        print(f"[thumbnail_service] ffprobe duration 실패: {exc}", file=sys.stderr)
+
+    # ── 2차: ffmpeg -i stderr에서 Duration 파싱 ──────────────────────────
+    try:
+        import re
+        result = subprocess.run(
+            ["ffmpeg", "-i", video_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+        )
+        # "Duration: 00:00:45.12" 패턴 검색
+        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr)
+        if match:
+            h, m, s = float(match.group(1)), float(match.group(2)), float(match.group(3))
+            d = h * 3600 + m * 60 + s
+            if d > 0:
+                return d
+    except Exception as exc:
+        print(f"[thumbnail_service] ffmpeg -i duration 파싱 실패: {exc}", file=sys.stderr)
+
     return 0.0
 
 

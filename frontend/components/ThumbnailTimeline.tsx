@@ -19,6 +19,8 @@ interface ThumbnailTimelineProps {
   clips: Clip[];
   /** 부모의 <video> ref — currentTime 연동용 */
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  /** 부모 video 엘리먼트에서 읽은 duration (API fallback용) */
+  videoDuration?: number;
 }
 
 type LoadState = "loading" | "ready" | "error";
@@ -27,6 +29,7 @@ export default function ThumbnailTimeline({
   jobId,
   clips,
   videoRef,
+  videoDuration = 0,
 }: ThumbnailTimelineProps) {
   const [thumbs, setThumbs] = useState<TimelineThumbnail[]>([]);
   const [duration, setDuration] = useState(0);
@@ -42,15 +45,21 @@ export default function ThumbnailTimeline({
         const data = await getTimelineThumbnails(jobId);
         if (cancelled) return;
         setThumbs(data.thumbnails);
-        setDuration(data.duration);
+        // API duration이 0이면 부모 video에서 받은 값 사용
+        const apiDur = data.duration;
+        setDuration(apiDur > 0 ? apiDur : videoDuration);
         setState(data.thumbnails.length > 0 ? "ready" : "error");
       } catch {
-        if (!cancelled) setState("error");
+        if (!cancelled) {
+          // API 실패해도 videoDuration 있으면 설정
+          if (videoDuration > 0) setDuration(videoDuration);
+          setState("error");
+        }
       }
     };
     load();
     return () => { cancelled = true; };
-  }, [jobId]);
+  }, [jobId, videoDuration]);
 
   // ── 비디오 currentTime 추적 ──────────────────────────────────────────
   useEffect(() => {
@@ -122,7 +131,7 @@ export default function ThumbnailTimeline({
       <h3 className="text-lg font-bold text-gray-700 mb-2 flex items-center gap-2">
         🎞️ 영상 썸네일 타임라인
         <span className="text-sm font-normal text-gray-400">
-          (총 {duration.toFixed(1)}초)
+          {duration > 0 ? `(총 ${duration.toFixed(1)}초)` : "(길이 정보 없음)"}
         </span>
       </h3>
 

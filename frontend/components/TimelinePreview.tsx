@@ -13,7 +13,8 @@ interface Clip {
 
 interface TimelinePreviewProps {
   jobId: string;
-  clips: Clip[];
+  clips?: Clip[];
+  editCommand?: any;
 }
 
 interface Segment {
@@ -27,7 +28,7 @@ interface Segment {
 
 type VideoState = "loading" | "ready" | "error";
 
-export default function TimelinePreview({ jobId, clips }: TimelinePreviewProps) {
+export default function TimelinePreview({ jobId, clips = [], editCommand }: TimelinePreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [duration, setDuration] = useState<number>(0);
   const [videoState, setVideoState] = useState<VideoState>("loading");
@@ -194,7 +195,7 @@ export default function TimelinePreview({ jobId, clips }: TimelinePreviewProps) 
       </h2>
 
       {/* 비디오 플레이어 */}
-      <div className="mb-4 bg-black rounded-xl overflow-hidden shadow-md flex justify-center">
+      <div className="mb-4 bg-black rounded-xl overflow-hidden shadow-md flex justify-center relative">
         <video
           ref={videoRef}
           src={videoUrl}
@@ -205,6 +206,26 @@ export default function TimelinePreview({ jobId, clips }: TimelinePreviewProps) 
           onError={handleError}
           onTimeUpdate={handleTimeUpdate}
         />
+        
+        {/* ★ CSS 자막 오버레이 (Preview-only UI) */}
+        {editCommand && (editCommand.cover_subtitle_area || editCommand.add_subtitle) && (
+          <div className="absolute bottom-[50px] left-0 w-full flex flex-col items-center pointer-events-none">
+            <span className="text-[10px] bg-red-500/80 text-white px-2 py-0.5 rounded mb-1">
+              Preview-only UI (실제 렌더링 시 적용됨)
+            </span>
+            <div className="bg-black w-[80%] h-[15%] min-h-[40px] flex items-center justify-center px-4 rounded-sm">
+              {editCommand.add_subtitle && (
+                <p className={`text-white font-bold text-center ${
+                  editCommand.subtitle_size === 'large' ? 'text-2xl sm:text-3xl' :
+                  editCommand.subtitle_size === 'small' ? 'text-sm sm:text-base' :
+                  'text-lg sm:text-xl'
+                }`}>
+                  {editCommand.subtitle_text?.trim() || "말로컷 AI로 새롭게 편집된 영상입니다"}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 재생 중 표시 */}
@@ -236,6 +257,7 @@ export default function TimelinePreview({ jobId, clips }: TimelinePreviewProps) 
             jobId={jobId}
             clips={clips}
             videoRef={videoRef}
+            videoDuration={duration}
           />
 
           {/* 구간 버튼 */}
