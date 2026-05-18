@@ -64,36 +64,49 @@ npm run dev
 
 ---
 
-## 🎬 렌더링 파이프라인 상세 설명
+## 🎬 렌더링 파이프라인 (MVP 테스트 렌더링)
 
-### FFmpeg가 설치된 경우 (권장)
+> 현재 렌더링은 실제 AI 편집이 아닌 **MVP용 테스트 렌더링**입니다.
 
-`render_service.py`는 `ffmpeg` 실행 파일이 PATH에 있을 때 다음 편집 효과를 **하나의 filtergraph**로 실제 영상에 적용합니다.
+### FFmpeg가 설치된 경우 (가시적 효과 적용)
+
+`ffmpeg`가 PATH에 있을 때 다음 효과를 **filtergraph** 하나로 실제 영상에 적용합니다.
 
 | 순서 | 필터 | 내용 |
 |------|------|------|
-| 1 | `crop` + `scale` | 원본의 약 97% 영역만 잘라서 다시 원본 해상도로 확대 → **1.03× 줌인** 효과 |
-| 2 | `eq` | `brightness=+0.06`, `contrast=1.05`, `saturation=1.1` → **밝기·대비·채도 보정** |
-| 3 | `drawbox` | 하단 약 18% 영역에 **반투명 검정 박스** 삽입 (기존 자막 영역 가림) |
-| 4 | `drawtext` | `"말로컷 AI로 새롭게 편집된 영상입니다"` 문구를 **흰색 큰 글씨·검은 외곽선**으로 하단 중앙에 삽입 |
+| 1 | `crop` + `scale` | 중앙 97% 잘라서 원본 해상도로 복원 → **1.03× 줌인** |
+| 2 | `eq` | `brightness=+0.06`, `contrast=1.05`, `saturation=1.1` → 밝기·대비·채도 보정 |
+| 3 | `drawbox` | 하단 약 18% 영역에 **반투명 검정 박스** (기존 자막 영역 가림) |
+| 4 | `drawtext` | `"말로컷 AI로 새롭게 편집된 영상입니다"` 흰색 큰 글씨 + 검은 외곽선, 하단 중앙 |
 
-- 자막 폰트는 Windows 시스템 폰트(`malgun.ttf` → `gulim.ttc` → `arial.ttf`) 순으로 자동 탐색합니다.
-- 폰트 크기는 영상 세로 해상도 기준으로 자동 계산되어 70대 사용자도 읽기 쉬운 크기(최소 48px)로 설정됩니다.
-- 인코딩: `libx264 / AAC`, preset `fast`, CRF 23.
-- 썸네일은 `input.mp4`의 1초(또는 0초) 프레임을 FFmpeg로 추출합니다.
+**2단계 시도 방식:**
+1. **자막 포함** — 한글 폰트(`malgun.ttf` → `gulim.ttc` → `arial.ttf`) + drawtext
+2. **자막 제외** — drawtext 없이 줌인·보정·박스만 적용 (FFmpeg 빌드에 FreeType 없는 경우 대비)
 
-### FFmpeg가 없는 경우 (Fallback)
+인코딩: `libx264`, preset `fast`, CRF 23 / `aac` 128k
 
-- `input.mp4`를 `edited_video.mp4`로 **그대로 복사**합니다 (영상 변환 없음).
-- Pillow가 설치된 경우 1280×720 텍스트 안내 이미지를 `thumbnail.jpg`로 생성합니다.
-- Pillow도 없는 경우 빈 파일이 생성됩니다.
+### FFmpeg가 없거나 모든 시도 실패 시 (Fallback)
 
-### 오류 처리
+- `input.mp4`를 `edited_video.mp4`로 **그대로 복사** → 항상 재생 가능한 파일 보장
+- 복사 후에도 파일이 1 KB 미만이면 job 상태를 `failed`로 저장하고 에러 메시지를 남김
 
-FFmpeg가 있더라도 filtergraph 실행 중 오류 발생 시, `subprocess.CalledProcessError`를 잡아 서버 stderr에 진단 메시지를 출력하고 **원본 복사 fallback**으로 자동 전환합니다. 서버가 중단되지 않습니다.
+### 썸네일 생성 순서
+
+1. FFmpeg로 `input.mp4` 1초 지점 프레임 추출
+2. 실패 시 0초 지점으로 재시도
+3. 그래도 실패 시 Pillow로 **1280×720 fallback JPG** 자동 생성
+4. 생성 후 Pillow로 파일 무결성 검증 (`width > 10`, `height > 10`, 크기 ≥ 1 KB)
+5. 검증 실패 시 Pillow fallback 재생성
+
+### 실패 처리
+
+- `input.mp4` 없음 또는 `edited_video.mp4`가 1 KB 미만이면 `job.status = "failed"` 저장
+- 서버는 중단되지 않으며 다른 job은 정상 처리됨
 
 ### ⚠️ 현재 미구현 기능
 - Whisper 기반 음성 인식 / 자막 자동 추출
-- OCR 기반 기존 자막 감지
-- AI 인페인팅 (자막 영역 완전 제거)
+- OCR 기반 기존 자막 감지 및 인페인팅
 - 실제 편집 계획 반영 (컷 편집, 장면 재배치 등)
+- 음성 클론, 립싱크, 고급 트랜지션
+
+
