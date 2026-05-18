@@ -563,7 +563,13 @@ def _ffmpeg_render(
         return True
     _remove_if_invalid(output_path)
 
-    # 시도 3: 필터 없이 단순 재인코딩 (reorder도 무시됨)
+    # 시도 3: 실제 편집 명령이 없을 때만 필터 없이 단순 재인코딩을 허용합니다.
+    # clip_reorder 등 편집 명령이 있는데 여기까지 왔다면 효과 적용 렌더링이 실패한
+    # 것이므로, 재인코딩 결과를 completed로 오인하지 않도록 False를 반환합니다.
+    if _has_effective_edits(cmd):
+        _remove_if_invalid(output_path)
+        return False
+
     ok = _run_ffmpeg(base_args + [output_path])
     if ok and _is_valid_video(output_path):
         return True
