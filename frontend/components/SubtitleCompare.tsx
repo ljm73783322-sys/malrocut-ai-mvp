@@ -91,7 +91,7 @@ export default function SubtitleCompare({
               원본 자막이 아직 추출되지 않았습니다.
               <br />
               <span className="text-sm text-gray-300 mt-1 block">
-                (Whisper 음성 인식은 추후 지원 예정)
+                (기존 자막 영역 가리기는 지원되며, Whisper 음성 인식은 추후 지원 예정)
               </span>
             </div>
           )}
