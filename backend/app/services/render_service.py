@@ -441,24 +441,39 @@ def _build_filtergraph_no_text(
     return ",".join(filters) if filters else "null"
 
 
-def _build_reorder_filtergraph(base_vf: str, duration: float, clip_reorder: dict) -> str:
+def _video_normalize_filter(fps: int = 30) -> str:
+    """concat 입력 비디오 스트림의 형식/해상도/SAR/DAR/FPS를 통일합니다."""
+    return f"scale=1280:720,setsar=1,setdar=16/9,fps={fps},format=yuv420p"
+
+
+def _build_reorder_filtergraph(
+    base_vf: str,
+    duration: float,
+    clip_reorder: dict,
+    video_width: int,
+    video_height: int,
+) -> str:
     """
-    기본 vf(zoom, drawbox 등)를 적용한 비디오와 원본 오디오를
-    여러 구간으로 자른 뒤, 요청된 순서대로 이어붙이는 filter_complex 문자열을 생성합니다.
+    원본을 여러 구간으로 자른 뒤 요청된 순서대로 이어붙이는 filter_complex 문자열을 생성합니다.
+
+    concat은 모든 입력 비디오 스트림의 해상도, SAR, DAR, FPS, pixel format이 같아야 하므로
+    각 trim 구간마다 base_vf(zoom/brightness/drawbox/drawtext)를 적용한 뒤 동일한
+    scale/setsar/setdar/fps/format 정규화를 거쳐 concat에 전달합니다.
     """
     clips = clip_reorder.get("clips", [])
     if len(clips) != 2:
         return ""
-    
+
     sorted_clips = sorted(clips, key=lambda c: c["source_start"])
     c1, c2 = sorted_clips[0], sorted_clips[1]
-    
+
     s1, e1 = float(c1["source_start"]), float(c1["source_end"])
     s2, e2 = float(c2["source_start"]), float(c2["source_end"])
-    
+
     # duration을 넘지 않도록 제한
+    e1 = min(e1, duration)
     e2 = min(e2, duration)
-    if e2 <= s2:
+    if e1 <= s1 or e2 <= s2:
         return ""
 
     # 잘라낼 구간 정의 (순서대로)
@@ -467,36 +482,37 @@ def _build_reorder_filtergraph(base_vf: str, duration: float, clip_reorder: dict
         (s2, e2),  # 순서 바뀜: 뒷부분
         (e1, s2),
         (s1, e1),  # 순서 바뀜: 앞부분
-        (e2, duration)
+        (e2, duration),
     ]
-    
+
     valid_segments = []
     for s, e in segments:
         if e - s > 0.1:  # 0.1초 이상인 구간만 포함 (빈 구간 방지)
             valid_segments.append((s, e))
-            
+
     if not valid_segments:
         return ""
-        
+
     fg = []
-    if base_vf and base_vf != "null":
-        fg.append(f"[0:v]{base_vf}[v_base]")
-        v_in = "v_base"
-    else:
-        v_in = "0:v"
-        
     concat_inputs = []
+    normalize_vf = _video_normalize_filter()
+
     for i, (s, e) in enumerate(valid_segments):
-        # Video
-        fg.append(f"[{v_in}]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}]")
+        # Video: trim 후 효과를 적용하고 concat 직전에 해상도/SAR/DAR/FPS/pixel format을 통일합니다.
+        video_filters = [f"trim=start={s}:end={e}", "setpts=PTS-STARTPTS"]
+        if base_vf and base_vf != "null":
+            video_filters.append(base_vf)
+        video_filters.append(normalize_vf)
+        fg.append(f"[0:v]{','.join(video_filters)}[v{i}]")
+
         # Audio
         fg.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
         concat_inputs.append(f"[v{i}][a{i}]")
-        
+
     n = len(valid_segments)
     concat_str = "".join(concat_inputs)
     fg.append(f"{concat_str}concat=n={n}:v=1:a=1[outv][outa]")
-    
+
     return ";".join(fg)
 
 
@@ -532,7 +548,7 @@ def _ffmpeg_render(
 
     def _try_render(vf_str: str) -> bool:
         if use_reorder:
-            fc = _build_reorder_filtergraph(vf_str, duration, cr)
+            fc = _build_reorder_filtergraph(vf_str, duration, cr, video_width, video_height)
             if fc:
                 args = base_args.copy()
                 args.extend(["-filter_complex", fc, "-map", "[outv]", "-map", "[outa]", output_path])
