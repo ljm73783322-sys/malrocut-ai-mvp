@@ -123,3 +123,7 @@ export const getThumbnailAbsoluteUrl = (relativeUrl: string): string =>
 /** 결과물 다운로드 URL */
 export const getDownloadUrl = (jobId: string, fileType: "video" | "thumbnail" | "subtitle"): string =>
   `${API_BASE_URL}/api/jobs/${jobId}/download/${fileType}`;
+
+/** 대표 썸네일 미리보기 URL */
+export const getRepresentativeThumbnailUrl = (jobId: string): string =>
+  `${API_BASE_URL}/api/jobs/${jobId}/thumbnail`;
