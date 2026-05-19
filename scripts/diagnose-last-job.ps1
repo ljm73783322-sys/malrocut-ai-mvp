@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $jobsDir = Join-Path $repoRoot "backend\storage\jobs"
@@ -45,7 +45,7 @@ if (Test-Path $jobJsonPath) {
         Write-Host "WARN: job.json JSON parse failed: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "BUG: job.json 없음" -ForegroundColor Red
+    Write-Host "BUG: job.json missing" -ForegroundColor Red
 }
 
 Write-Host "`n== Hash compare ==" -ForegroundColor Cyan
@@ -57,21 +57,21 @@ if ((Test-Path $inputPath) -and (Test-Path $outputPath)) {
     Write-Host "edited.mp4 SHA256: $outHash"
     Write-Host "same_hash = $hashEqual"
 } else {
-    Write-Host "WARN: input.mp4 또는 edited_video.mp4가 없습니다." -ForegroundColor Yellow
+    Write-Host "WARN: input.mp4 or edited_video.mp4 is missing." -ForegroundColor Yellow
 }
 
 Write-Host "`n== subtitle.srt (UTF-8) ==" -ForegroundColor Cyan
 if (Test-Path $subtitlePath) {
     Get-Content -Path $subtitlePath -Raw -Encoding UTF8 | Write-Host
 } else {
-    Write-Host "subtitle.srt 없음" -ForegroundColor Yellow
+    Write-Host "WARN: subtitle.srt missing" -ForegroundColor Yellow
 }
 
 Write-Host "`n== edit_command.json (UTF-8) ==" -ForegroundColor Cyan
 if (Test-Path $editCmdPath) {
     Get-Content -Path $editCmdPath -Raw -Encoding UTF8 | Write-Host
 } else {
-    Write-Host "edit_command.json 없음" -ForegroundColor Yellow
+    Write-Host "WARN: edit_command.json missing" -ForegroundColor Yellow
 }
 
 Write-Host "`n== /status API ==" -ForegroundColor Cyan
@@ -82,32 +82,32 @@ if ($jobObj -and $jobObj.job_id) {
         $apiStatus | ConvertTo-Json -Depth 5 | Write-Host
     } catch {
         $apiWarn = $true
-        Write-Host "WARN: API status 조회 불가 ($statusUrl)" -ForegroundColor Yellow
+        Write-Host "WARN: API status request failed ($statusUrl)" -ForegroundColor Yellow
     }
 } else {
     $apiWarn = $true
-    Write-Host "WARN: job_id를 알 수 없어 API status를 조회하지 못했습니다." -ForegroundColor Yellow
+    Write-Host "WARN: job_id unavailable; API status check skipped." -ForegroundColor Yellow
 }
 
 Write-Host "`n== Final Verdict ==" -ForegroundColor Cyan
 if (-not (Test-Path $jobJsonPath)) {
-    Write-Host "BUG: job.json 없음" -ForegroundColor Red
+    Write-Host "BUG: job.json missing" -ForegroundColor Red
     exit 2
 }
 if ($jobStatus -eq "completed" -and $hashEqual -eq $false) {
-    Write-Host "PASS: completed + 해시 다름 + job.json 있음" -ForegroundColor Green
-    if ($apiWarn) { Write-Host "WARN: API status 조회 불가" -ForegroundColor Yellow }
+    Write-Host "PASS: completed + hash differs + job.json present" -ForegroundColor Green
+    if ($apiWarn) { Write-Host "WARN: API status unavailable" -ForegroundColor Yellow }
     exit 0
 }
 if ($jobStatus -eq "failed" -and $jobError) {
-    Write-Host "FAIL: failed + error 있음" -ForegroundColor Red
-    if ($apiWarn) { Write-Host "WARN: API status 조회 불가" -ForegroundColor Yellow }
+    Write-Host "FAIL: failed + error present" -ForegroundColor Red
+    if ($apiWarn) { Write-Host "WARN: API status unavailable" -ForegroundColor Yellow }
     exit 1
 }
 if ($jobStatus -eq "completed" -and $hashEqual -eq $true) {
-    Write-Host "BUG: completed인데 해시 같음" -ForegroundColor Red
+    Write-Host "BUG: completed but input/output hashes are equal" -ForegroundColor Red
     exit 3
 }
 
-Write-Host "WARN: API status 조회 불가 또는 판정 조건 미충족" -ForegroundColor Yellow
+Write-Host "WARN: API status unavailable or verdict conditions not met" -ForegroundColor Yellow
 exit 4
