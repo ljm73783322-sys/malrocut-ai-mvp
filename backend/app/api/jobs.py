@@ -1,5 +1,7 @@
 import uuid
 import os
+import zipfile
+import tempfile
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -112,6 +114,49 @@ async def download_file(job_id: str, file_type: str):
     return FileResponse(path=file_path, filename=filename, media_type=media_type)
 
 
+
+
+@router.get("/{job_id}/download/package")
+async def download_result_package(job_id: str):
+    """완성 결과물을 ZIP으로 묶어 반환합니다."""
+    storage_root = os.path.abspath(STORAGE_DIR)
+    job_dir = os.path.abspath(os.path.join(storage_root, job_id))
+
+    if os.path.commonpath([storage_root, job_dir]) != storage_root:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    if not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job folder not found")
+
+    package_files = [
+        "edited_video.mp4",
+        "thumbnail.jpg",
+        "subtitle.srt",
+        "job.json",
+        "edit_command.json",
+    ]
+
+    existing_files: list[tuple[str, str]] = []
+    for filename in package_files:
+        path = _safe_job_file_path(job_id, filename)
+        if os.path.isfile(path):
+            existing_files.append((filename, path))
+
+    if not existing_files:
+        raise HTTPException(status_code=404, detail="No downloadable result files found")
+
+    tmp = tempfile.NamedTemporaryFile(prefix=f"malrocut-result-{job_id}-", suffix=".zip", delete=False)
+    zip_path = tmp.name
+    tmp.close()
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for filename, path in existing_files:
+            zf.write(path, arcname=filename)
+
+    return FileResponse(
+        path=zip_path,
+        filename=f"malrocut-result-{job_id}.zip",
+        media_type="application/zip",
+    )
 @router.get("/{job_id}/thumbnail")
 async def get_representative_thumbnail(job_id: str):
     """렌더링된 대표 썸네일(thumbnail.jpg)만 안전하게 반환합니다."""

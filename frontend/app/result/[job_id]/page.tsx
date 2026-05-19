@@ -1,7 +1,7 @@
 "use client";
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getDownloadUrl, getRepresentativeThumbnailUrl } from '@/lib/api';
+import { getDownloadUrl, getRepresentativeThumbnailUrl, getResultPackageDownloadUrl } from '@/lib/api';
 
 export default function ResultPage({ params }: { params: { job_id: string } }) {
   const router = useRouter();
@@ -10,6 +10,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
   const videoUrl = getDownloadUrl(params.job_id, 'video');
   const thumbnailUrl = getRepresentativeThumbnailUrl(params.job_id);
   const thumbnailDownloadUrl = getDownloadUrl(params.job_id, 'thumbnail');
+  const packageDownloadUrl = getResultPackageDownloadUrl(params.job_id);
 
   return (
     <div className="flex flex-col items-center space-y-12 py-10 w-full max-w-5xl mx-auto px-4">
@@ -68,6 +69,12 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
           className="bg-orange-500 text-white text-3xl font-bold py-6 px-8 rounded-2xl shadow-lg hover:bg-orange-600 text-center"
         >
           🖼️ 썸네일 사진 저장하기
+        </a>
+        <a 
+          href={packageDownloadUrl}
+          className="bg-purple-600 text-white text-3xl font-bold py-6 px-8 rounded-2xl shadow-lg hover:bg-purple-700 text-center"
+        >
+          📦 전체 패키지 ZIP 다운로드
         </a>
         <a 
           href={getDownloadUrl(params.job_id, 'subtitle')}
