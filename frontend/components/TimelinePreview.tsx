@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { getInputVideoUrl } from "@/lib/api";
 import ThumbnailTimeline from "@/components/ThumbnailTimeline";
 
@@ -36,8 +36,12 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
   const [videoState, setVideoState] = useState<VideoState>("loading");
   const [activeSegment, setActiveSegment] = useState<Segment | null>(null);
   const [playingLabel, setPlayingLabel] = useState<string>("");
-  const clipA = clips[0] ?? null;
-  const clipB = clips[1] ?? null;
+  const orderedClips = useMemo(
+    () => [...clips].sort((a, b) => a.source_start - b.source_start),
+    [clips]
+  );
+  const clipA = orderedClips[0] ?? null;
+  const clipB = orderedClips[1] ?? null;
 
   // ── 이벤트 핸들러 ─────────────────────────────────────────────────────
   const handleLoadedMetadata = () => {
@@ -256,7 +260,7 @@ export default function TimelinePreview({ jobId, clips = [], editCommand }: Time
           {/* ★ 썸네일 타임라인 */}
           <ThumbnailTimeline
             jobId={jobId}
-            clips={clips}
+            clips={orderedClips}
             videoRef={videoRef}
             videoDuration={duration}
           />

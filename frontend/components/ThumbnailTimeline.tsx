@@ -37,6 +37,10 @@ export default function ThumbnailTimeline({
   const [currentTime, setCurrentTime] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const THUMB_WIDTH = 80;
+  const THUMB_GAP = 2;
+  const TRACK_PADDING = 4;
+
   // ── 썸네일 데이터 로드 ─────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -67,6 +71,7 @@ export default function ThumbnailTimeline({
     if (!video) return;
 
     const handler = () => setCurrentTime(video.currentTime);
+    setCurrentTime(video.currentTime);
     video.addEventListener("timeupdate", handler);
     return () => video.removeEventListener("timeupdate", handler);
   }, [videoRef]);
@@ -76,6 +81,7 @@ export default function ThumbnailTimeline({
     (time: number) => {
       if (videoRef.current) {
         videoRef.current.currentTime = time;
+        setCurrentTime(time);
         videoRef.current.play().catch(() => {});
       }
     },
@@ -99,9 +105,10 @@ export default function ThumbnailTimeline({
   // ── 재생 헤드 위치 (%) ───────────────────────────────────────────────
   const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
   const safeCurrentTime = Number.isFinite(currentTime) ? currentTime : 0;
-  const headPct = safeDuration > 0
-    ? Math.min(100, Math.max(0, (safeCurrentTime / safeDuration) * 100))
-    : null;
+  const trackStep = THUMB_WIDTH + THUMB_GAP;
+  const maxSecond = Math.max(0, thumbs.length - 1);
+  const clampedTime = Math.min(Math.max(0, safeCurrentTime), maxSecond);
+  const headLeftPx = thumbs.length > 0 ? TRACK_PADDING + (clampedTime * trackStep) : null;
 
   // ── 로딩 상태 ────────────────────────────────────────────────────────
   if (state === "loading") {
@@ -154,26 +161,28 @@ export default function ThumbnailTimeline({
 
       {/* 썸네일 스크롤 영역 */}
       <div className="relative">
-        {/* 재생 헤드 (세로선) */}
-        {headPct !== null && (
-          <div
-            className="absolute top-0 bottom-0 z-20 pointer-events-none"
-            style={{ left: `${headPct}%` }}
-          >
-            <div className="w-0.5 h-full bg-red-500 mx-auto" />
-            <div
-              className="absolute -top-1 left-1/2 -translate-x-1/2
-                         w-3 h-3 bg-red-500 rounded-full border-2 border-white shadow"
-            />
-          </div>
-        )}
-
         {/* 썸네일 목록 */}
         <div
           ref={scrollRef}
-          className="flex overflow-x-auto gap-0.5 rounded-lg border-2 border-gray-300 bg-gray-900 p-1"
+          className="overflow-x-auto rounded-lg border-2 border-gray-300 bg-gray-900 p-1"
           style={{ scrollbarWidth: "thin" }}
         >
+          <div className="relative w-max min-w-full">
+            {/* 재생 헤드 (세로선) */}
+            {headLeftPx !== null && (
+              <div
+                className="absolute top-0 bottom-0 z-20 pointer-events-none"
+                style={{ left: `${headLeftPx}px` }}
+              >
+                <div className="w-0.5 h-full bg-red-500" />
+                <div
+                  className="absolute -top-1 left-1/2 -translate-x-1/2
+                             w-3 h-3 bg-red-500 rounded-full border-2 border-white shadow"
+                />
+              </div>
+            )}
+
+            <div className="flex gap-0.5">
           {thumbs.map((thumb) => {
             const clip = getClipInfo(thumb.time);
             const isCurrent =
@@ -215,6 +224,8 @@ export default function ThumbnailTimeline({
               </div>
             );
           })}
+            </div>
+          </div>
         </div>
       </div>
 
