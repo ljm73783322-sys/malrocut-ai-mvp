@@ -441,9 +441,9 @@ def _build_filtergraph_no_text(
     return ",".join(filters) if filters else "null"
 
 
-def _video_normalize_filter(video_width: int, video_height: int, fps: int = 30) -> str:
-    """concat 입력 비디오 스트림의 형식/해상도를 통일합니다."""
-    return f"scale={video_width}:{video_height},setsar=1,fps={fps},format=yuv420p"
+def _video_normalize_filter(fps: int = 30) -> str:
+    """concat 입력 비디오 스트림의 형식/해상도/SAR/DAR/FPS를 통일합니다."""
+    return f"scale=1280:720,setsar=1,setdar=16/9,fps={fps},format=yuv420p"
 
 
 def _build_reorder_filtergraph(
@@ -456,9 +456,9 @@ def _build_reorder_filtergraph(
     """
     원본을 여러 구간으로 자른 뒤 요청된 순서대로 이어붙이는 filter_complex 문자열을 생성합니다.
 
-    concat은 모든 입력 비디오 스트림의 해상도, SAR, FPS, pixel format이 같아야 하므로
+    concat은 모든 입력 비디오 스트림의 해상도, SAR, DAR, FPS, pixel format이 같아야 하므로
     각 trim 구간마다 base_vf(zoom/brightness/drawbox/drawtext)를 적용한 뒤 동일한
-    scale/setsar/fps/format 정규화를 거쳐 concat에 전달합니다.
+    scale/setsar/setdar/fps/format 정규화를 거쳐 concat에 전달합니다.
     """
     clips = clip_reorder.get("clips", [])
     if len(clips) != 2:
@@ -495,10 +495,10 @@ def _build_reorder_filtergraph(
 
     fg = []
     concat_inputs = []
-    normalize_vf = _video_normalize_filter(video_width, video_height)
+    normalize_vf = _video_normalize_filter()
 
     for i, (s, e) in enumerate(valid_segments):
-        # Video: trim 후 효과를 적용하고 concat 직전에 해상도/SAR/FPS/pixel format을 통일합니다.
+        # Video: trim 후 효과를 적용하고 concat 직전에 해상도/SAR/DAR/FPS/pixel format을 통일합니다.
         video_filters = [f"trim=start={s}:end={e}", "setpts=PTS-STARTPTS"]
         if base_vf and base_vf != "null":
             video_filters.append(base_vf)
