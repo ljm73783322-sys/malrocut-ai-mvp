@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $jobsDir = Join-Path $repoRoot "backend\storage\jobs"
@@ -82,7 +82,7 @@ if ($jobObj -and $jobObj.job_id) {
         $apiStatus | ConvertTo-Json -Depth 5 | Write-Host
     } catch {
         $apiWarn = $true
-        Write-Host "WARN: API status 조회 불가 ($statusUrl)" -ForegroundColor Yellow
+        Write-Host "WARN: API status request failed ($statusUrl)" -ForegroundColor Yellow
     }
 } else {
     $apiWarn = $true
@@ -96,12 +96,12 @@ if (-not (Test-Path $jobJsonPath)) {
 }
 if ($jobStatus -eq "completed" -and $hashEqual -eq $false) {
     Write-Host "PASS: completed + hash differs + job.json present" -ForegroundColor Green
-    if ($apiWarn) { Write-Host "WARN: API status 조회 불가" -ForegroundColor Yellow }
+    if ($apiWarn) { Write-Host "WARN: API status unavailable" -ForegroundColor Yellow }
     exit 0
 }
 if ($jobStatus -eq "failed" -and $jobError) {
     Write-Host "FAIL: failed + error present" -ForegroundColor Red
-    if ($apiWarn) { Write-Host "WARN: API status 조회 불가" -ForegroundColor Yellow }
+    if ($apiWarn) { Write-Host "WARN: API status unavailable" -ForegroundColor Yellow }
     exit 1
 }
 if ($jobStatus -eq "completed" -and $hashEqual -eq $true) {
