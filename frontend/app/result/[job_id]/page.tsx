@@ -93,6 +93,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
 
     try {
       const latestPayload: ThumbnailTextPayload = {
+      const latestPayload = {
         text: thumbnailTextPayload.text,
         font_size: thumbnailTextPayload.font_size,
         // text_color controls the text glyph color.
@@ -107,6 +108,9 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
       }
 
       await updateJobThumbnailText(params.job_id, latestPayload);
+      const { reset_base: _resetBase, ...latestPayload } = thumbnailTextPayload;
+      await updateJobThumbnailText(params.job_id, latestPayload);
+      await updateJobThumbnailText(params.job_id, thumbnailTextPayload);
       setThumbnailMessage('썸네일 문구가 적용되었습니다.');
       refreshThumbnail();
     } catch (err) {
