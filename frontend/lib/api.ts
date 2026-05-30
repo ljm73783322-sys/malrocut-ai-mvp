@@ -109,6 +109,77 @@ export const getTimelineThumbnails = async (jobId: string): Promise<TimelineThum
   return res.data;
 };
 
+
+// ─── 작업 히스토리 ──────────────────────────────────────────────────────
+
+export interface JobSummary {
+  job_id: string;
+  status: 'completed' | 'failed' | 'rendering' | 'pending' | 'unknown';
+  progress: number;
+  created_at: string;
+  updated_at: string;
+  has_video: boolean;
+  has_thumbnail: boolean;
+  has_subtitle: boolean;
+  has_job_json: boolean;
+  has_edit_command: boolean;
+  video_download_url: string;
+  thumbnail_download_url: string;
+  subtitle_download_url: string;
+  package_download_url: string;
+  result_url: string;
+  thumbnail_url: string;
+}
+
+export interface DeleteJobResponse {
+  ok: boolean;
+  deleted: boolean;
+  job_id: string;
+}
+
+export const getJobs = async (): Promise<JobSummary[]> => {
+  const res = await api.get('/jobs');
+  return res.data;
+};
+
+export const deleteJob = async (jobId: string): Promise<DeleteJobResponse> => {
+  const res = await api.delete(`/jobs/${jobId}`);
+  return res.data;
+};
+
+
+// ─── 썸네일 편집 ──────────────────────────────────────────────────────────
+
+export interface ThumbnailTextPayload {
+  text: string;
+  font_size: number;
+  text_color: string;
+  background_color: string;
+  position: 'center' | 'top' | 'bottom';
+}
+
+export interface ThumbnailUpdateResponse {
+  ok: boolean;
+  job_id: string;
+  thumbnail_url: string;
+}
+
+export const uploadJobThumbnail = async (jobId: string, file: File): Promise<ThumbnailUpdateResponse> => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await api.post(`/jobs/${jobId}/thumbnail/upload`, formData);
+  return res.data;
+};
+
+export const updateJobThumbnailText = async (
+  jobId: string,
+  payload: ThumbnailTextPayload,
+): Promise<ThumbnailUpdateResponse> => {
+  const res = await api.post(`/jobs/${jobId}/thumbnail/text`, payload);
+  return res.data;
+};
+
 // ─── URL 생성 헬퍼 ────────────────────────────────────────────────────────
 
 /** 원본 영상 스트리밍 URL */
