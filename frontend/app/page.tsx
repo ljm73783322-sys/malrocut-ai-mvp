@@ -11,6 +11,14 @@ export default function Home() {
       <Link href="/upload" className="bg-blue-600 text-white text-3xl font-bold py-6 px-12 rounded-2xl shadow-lg hover:bg-blue-700 transition">
         시작하기 (영상 올리기)
       </Link>
+      <a
+        href="http://127.0.0.1:8000/api/health"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-sm text-gray-500 underline underline-offset-4 hover:text-gray-800"
+      >
+        백엔드 상태 확인
+      </a>
     </div>
   );
 }

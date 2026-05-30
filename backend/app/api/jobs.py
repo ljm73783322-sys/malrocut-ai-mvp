@@ -92,32 +92,7 @@ async def get_status(job_id: str):
         error=job.get("error"),
     )
 
-@router.get("/{job_id}/download/{file_type}")
-async def download_file(job_id: str, file_type: str):
-    filename_map = {
-        "video": "edited_video.mp4",
-        "original_video": "input.mp4",
-        "thumbnail": "thumbnail.jpg",
-        "subtitle": "subtitle.srt",
-        "original_subtitle": "subtitle_original.srt"
-    }
-    
-    if file_type not in filename_map:
-        raise HTTPException(status_code=400, detail="Invalid file type")
-        
-    filename = filename_map[file_type]
-    file_path = _safe_job_file_path(job_id, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not ready")
-
-    media_type = "video/mp4" if "video" in file_type else "image/jpeg" if file_type == "thumbnail" else "text/plain"
-    return FileResponse(path=file_path, filename=filename, media_type=media_type)
-
-
-
-
-@router.get("/{job_id}/download/package")
-async def download_result_package(job_id: str):
+def _build_result_package_response(job_id: str) -> FileResponse:
     """완성 결과물을 ZIP으로 묶어 반환합니다."""
     storage_root = os.path.abspath(STORAGE_DIR)
     job_dir = os.path.abspath(os.path.join(storage_root, job_id))
@@ -157,6 +132,38 @@ async def download_result_package(job_id: str):
         filename=f"malrocut-result-{job_id}.zip",
         media_type="application/zip",
     )
+
+
+@router.get("/{job_id}/download/package")
+async def download_result_package(job_id: str):
+    return _build_result_package_response(job_id)
+
+
+@router.get("/{job_id}/download/{file_type}")
+async def download_file(job_id: str, file_type: str):
+    if file_type == "package":
+        return _build_result_package_response(job_id)
+
+    filename_map = {
+        "video": "edited_video.mp4",
+        "original_video": "input.mp4",
+        "thumbnail": "thumbnail.jpg",
+        "subtitle": "subtitle.srt",
+        "original_subtitle": "subtitle_original.srt"
+    }
+    
+    if file_type not in filename_map:
+        raise HTTPException(status_code=400, detail="Invalid file type")
+        
+    filename = filename_map[file_type]
+    file_path = _safe_job_file_path(job_id, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not ready")
+
+    media_type = "video/mp4" if "video" in file_type else "image/jpeg" if file_type == "thumbnail" else "text/plain"
+    return FileResponse(path=file_path, filename=filename, media_type=media_type)
+
+
 @router.get("/{job_id}/thumbnail")
 async def get_representative_thumbnail(job_id: str):
     """렌더링된 대표 썸네일(thumbnail.jpg)만 안전하게 반환합니다."""
