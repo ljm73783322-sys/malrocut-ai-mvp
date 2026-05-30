@@ -11,6 +11,21 @@ import {
   type ThumbnailTextPayload,
 } from '@/lib/api';
 
+
+function normalizeHexColor(value: string): string {
+  const trimmed = value.trim();
+  const withoutHash = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
+  const expanded = withoutHash.length === 3
+    ? withoutHash.split('').map((char) => `${char}${char}`).join('')
+    : withoutHash;
+
+  if (!/^[0-9a-fA-F]{6}$/.test(expanded)) {
+    throw new Error('Invalid hex color');
+  }
+
+  return `#${expanded.toUpperCase()}`;
+}
+
 export default function ResultPage({ params }: { params: { job_id: string } }) {
   const router = useRouter();
   const [thumbnailError, setThumbnailError] = useState(false);
@@ -77,6 +92,21 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
     setThumbnailMessage(null);
 
     try {
+      const latestPayload = {
+        text: thumbnailTextPayload.text,
+        font_size: thumbnailTextPayload.font_size,
+        // text_color controls the text glyph color.
+        text_color: normalizeHexColor(thumbnailTextPayload.text_color),
+        // background_color controls the rectangle behind the text.
+        background_color: normalizeHexColor(thumbnailTextPayload.background_color),
+        position: thumbnailTextPayload.position,
+      };
+
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('[result] thumbnail text payload', latestPayload);
+      }
+
+      await updateJobThumbnailText(params.job_id, latestPayload);
       const { reset_base: _resetBase, ...latestPayload } = thumbnailTextPayload;
       await updateJobThumbnailText(params.job_id, latestPayload);
       await updateJobThumbnailText(params.job_id, thumbnailTextPayload);

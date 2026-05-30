@@ -9,6 +9,7 @@ from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 from PIL import Image, ImageColor, ImageDraw, ImageFont, UnidentifiedImageError
 
 from ..models.job import JobStatus
@@ -168,6 +169,21 @@ def _thumbnail_success(job_id: str) -> dict:
 
 
 def _parse_hex_color(value: str, field_name: str) -> tuple[int, int, int]:
+    color_value = value.strip() if isinstance(value, str) else ""
+    if color_value.startswith("#"):
+        color_value = color_value[1:]
+
+    if len(color_value) == 3:
+        color_value = "".join(channel * 2 for channel in color_value)
+
+    if len(color_value) != 6 or any(char not in "0123456789abcdefABCDEF" for char in color_value):
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+    return (
+        int(color_value[0:2], 16),
+        int(color_value[2:4], 16),
+        int(color_value[4:6], 16),
+    )
     try:
         color = ImageColor.getrgb(value)
     except ValueError:
@@ -416,6 +432,9 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     if req.position not in {"center", "top", "bottom"}:
         raise HTTPException(status_code=400, detail="Invalid position")
 
+    # text_color controls the rendered text glyphs.
+    text_color = _parse_hex_color(req.text_color, "text_color")
+    # background_color controls only the rectangle behind the text.
     text_color = _parse_hex_color(req.text_color, "text_color")
     background_color = _parse_optional_background_color(req.background_color)
     font = _thumbnail_font(req.font_size)
