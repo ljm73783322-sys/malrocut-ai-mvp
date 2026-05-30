@@ -461,6 +461,10 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
         x, y = _text_position(req.position, image.size, (text_width, text_height))
 
         if background_color is not None:
+            # Draw the selected background_color as the text box fill.
+            # This must stay separate from the black stroke used only around glyphs.
+            draw.rectangle(
+                _background_box_bounds(x, y, (text_width, text_height), image.size),
             draw.rounded_rectangle(
                 _background_box_bounds(x, y, (text_width, text_height), image.size),
                 radius=18,

@@ -92,6 +92,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
     setThumbnailMessage(null);
 
     try {
+      const latestPayload: ThumbnailTextPayload = {
       const latestPayload = {
         text: thumbnailTextPayload.text,
         font_size: thumbnailTextPayload.font_size,
