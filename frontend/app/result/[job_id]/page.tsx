@@ -77,6 +77,8 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
     setThumbnailMessage(null);
 
     try {
+      const { reset_base: _resetBase, ...latestPayload } = thumbnailTextPayload;
+      await updateJobThumbnailText(params.job_id, latestPayload);
       await updateJobThumbnailText(params.job_id, thumbnailTextPayload);
       setThumbnailMessage('썸네일 문구가 적용되었습니다.');
       refreshThumbnail();
@@ -147,6 +149,9 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
 
             <div className="rounded-xl bg-white p-4 shadow-sm border border-orange-100">
               <label className="block text-lg font-bold text-gray-800 mb-2">썸네일 문구</label>
+              <p className="mb-3 text-sm font-medium text-gray-500">
+                문구를 다시 적용하면 이전 문구는 사라지고 새 문구만 적용됩니다.
+              </p>
               <input
                 type="text"
                 value={thumbnailTextPayload.text}

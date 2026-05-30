@@ -178,6 +178,12 @@ def _parse_hex_color(value: str, field_name: str) -> tuple[int, int, int]:
     return color
 
 
+def _parse_optional_background_color(value: str) -> tuple[int, int, int] | None:
+    if value is None or value.strip() == "" or value.strip().lower() == "transparent":
+        return None
+    return _parse_hex_color(value, "background_color")
+
+
 def _thumbnail_font(size: int):
     font_size = max(12, min(180, int(size)))
     candidates = [
@@ -201,7 +207,7 @@ def _thumbnail_font(size: int):
 def _text_position(position: str, image_size: tuple[int, int], text_size: tuple[int, int]) -> tuple[int, int]:
     width, height = image_size
     text_width, text_height = text_size
-    x = max(40, (width - text_width) // 2)
+    x = min(max(40, (width - text_width) // 2), max(40, width - text_width - 40))
 
     if position == "top":
         y = 80
@@ -211,6 +217,23 @@ def _text_position(position: str, image_size: tuple[int, int], text_size: tuple[
         y = max(40, (height - text_height) // 2)
 
     return x, y
+
+
+def _background_box_bounds(
+    x: int,
+    y: int,
+    text_size: tuple[int, int],
+    image_size: tuple[int, int],
+    padding: int = 28,
+) -> tuple[int, int, int, int]:
+    text_width, text_height = text_size
+    image_width, image_height = image_size
+    return (
+        max(0, x - padding),
+        max(0, y - padding),
+        min(image_width, x + text_width + padding),
+        min(image_height, y + text_height + padding),
+    )
 
 @router.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
@@ -248,6 +271,7 @@ class ThumbnailTextRequest(BaseModel):
     text_color: str = "#FFFF00"
     background_color: str = "#000000"
     position: str = "center"
+    reset_base: bool = False
 
 
 class EditRequest(BaseModel):
@@ -367,9 +391,13 @@ async def upload_job_thumbnail(job_id: str, file: UploadFile = File(...)):
 
     thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
 
+    base_path = os.path.join(job_dir, "thumbnail_base.jpg")
+
     try:
         with Image.open(file.file) as image:
-            image.convert("RGB").save(thumbnail_path, format="JPEG", quality=92)
+            clean_image = image.convert("RGB")
+            clean_image.save(thumbnail_path, format="JPEG", quality=92)
+            clean_image.save(base_path, format="JPEG", quality=92)
     except (UnidentifiedImageError, OSError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid image file")
 
@@ -380,6 +408,7 @@ async def upload_job_thumbnail(job_id: str, file: UploadFile = File(...)):
 async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     job_dir = _require_existing_job_dir(job_id)
     thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
+    base_path = os.path.join(job_dir, "thumbnail_base.jpg")
 
     text = req.text.strip()
     if not text:
@@ -388,21 +417,36 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
         raise HTTPException(status_code=400, detail="Invalid position")
 
     text_color = _parse_hex_color(req.text_color, "text_color")
-    background_color = _parse_hex_color(req.background_color, "background_color")
+    background_color = _parse_optional_background_color(req.background_color)
     font = _thumbnail_font(req.font_size)
 
     try:
-        if os.path.isfile(thumbnail_path):
-            with Image.open(thumbnail_path) as existing:
-                image = existing.convert("RGB")
+        if req.reset_base and os.path.isfile(thumbnail_path):
+            with Image.open(thumbnail_path) as current:
+                current.convert("RGB").save(base_path, format="JPEG", quality=92)
+
+        if not os.path.isfile(base_path) and os.path.isfile(thumbnail_path):
+            with Image.open(thumbnail_path) as current:
+                current.convert("RGB").save(base_path, format="JPEG", quality=92)
+
+        if os.path.isfile(base_path):
+            with Image.open(base_path) as base_image:
+                image = base_image.convert("RGB")
         else:
-            image = Image.new("RGB", (1280, 720), background_color)
+            image = Image.new("RGB", (1280, 720), (24, 24, 24))
 
         draw = ImageDraw.Draw(image)
         text_box = draw.multiline_textbbox((0, 0), text, font=font, spacing=12, stroke_width=3)
         text_width = text_box[2] - text_box[0]
         text_height = text_box[3] - text_box[1]
         x, y = _text_position(req.position, image.size, (text_width, text_height))
+
+        if background_color is not None:
+            draw.rounded_rectangle(
+                _background_box_bounds(x, y, (text_width, text_height), image.size),
+                radius=18,
+                fill=background_color,
+            )
 
         # TODO: Phase 3 drag-and-drop editor should let users place text visually.
         draw.multiline_text(
