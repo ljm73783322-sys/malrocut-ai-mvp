@@ -16,6 +16,9 @@ export default function Home() {
           작업 히스토리 보기
         </Link>
       </div>
+      <Link href="/upload" className="bg-blue-600 text-white text-3xl font-bold py-6 px-12 rounded-2xl shadow-lg hover:bg-blue-700 transition">
+        시작하기 (영상 올리기)
+      </Link>
       <a
         href="http://127.0.0.1:8000/api/health"
         target="_blank"
