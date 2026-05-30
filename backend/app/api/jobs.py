@@ -9,6 +9,7 @@ from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
+from PIL import Image, ImageColor, ImageDraw, ImageFont, UnidentifiedImageError
 
 from ..models.job import JobStatus
 from ..services import job_store, video_service, edit_service, render_service, thumbnail_service
@@ -150,6 +151,67 @@ def _safe_job_file_path(job_id: str, filename: str) -> str:
 
     return file_path
 
+
+def _require_existing_job_dir(job_id: str) -> str:
+    job_dir = _safe_job_dir_path(job_id)
+    if os.path.islink(job_dir) or not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job folder not found")
+    return job_dir
+
+
+def _thumbnail_success(job_id: str) -> dict:
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "thumbnail_url": f"/api/jobs/{job_id}/thumbnail",
+    }
+
+
+def _parse_hex_color(value: str, field_name: str) -> tuple[int, int, int]:
+    try:
+        color = ImageColor.getrgb(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+    if len(color) == 4:
+        return color[:3]
+    return color
+
+
+def _thumbnail_font(size: int):
+    font_size = max(12, min(180, int(size)))
+    candidates = [
+        "C:/Windows/Fonts/malgunbd.ttf",
+        "C:/Windows/Fonts/malgun.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            try:
+                return ImageFont.truetype(candidate, font_size)
+            except OSError:
+                continue
+
+    return ImageFont.load_default()
+
+
+def _text_position(position: str, image_size: tuple[int, int], text_size: tuple[int, int]) -> tuple[int, int]:
+    width, height = image_size
+    text_width, text_height = text_size
+    x = max(40, (width - text_width) // 2)
+
+    if position == "top":
+        y = 80
+    elif position == "bottom":
+        y = max(40, height - text_height - 90)
+    else:
+        y = max(40, (height - text_height) // 2)
+
+    return x, y
+
 @router.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
     job_id = str(uuid.uuid4())
@@ -179,6 +241,14 @@ async def get_analysis(job_id: str):
     if not job or not job.get("analysis"):
         raise HTTPException(status_code=404, detail="Analysis not found")
     return job["analysis"]
+
+class ThumbnailTextRequest(BaseModel):
+    text: str
+    font_size: int = 64
+    text_color: str = "#FFFF00"
+    background_color: str = "#000000"
+    position: str = "center"
+
 
 class EditRequest(BaseModel):
     prompt: str = ""
@@ -284,6 +354,72 @@ async def download_file(job_id: str, file_type: str):
 
     media_type = "video/mp4" if "video" in file_type else "image/jpeg" if file_type == "thumbnail" else "text/plain"
     return FileResponse(path=file_path, filename=filename, media_type=media_type)
+
+
+@router.post("/{job_id}/thumbnail/upload")
+async def upload_job_thumbnail(job_id: str, file: UploadFile = File(...)):
+    job_dir = _require_existing_job_dir(job_id)
+
+    allowed_extensions = {".png", ".jpg", ".jpeg", ".webp"}
+    extension = os.path.splitext(file.filename or "")[1].lower()
+    if extension not in allowed_extensions:
+        raise HTTPException(status_code=400, detail="Invalid image type")
+
+    thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
+
+    try:
+        with Image.open(file.file) as image:
+            image.convert("RGB").save(thumbnail_path, format="JPEG", quality=92)
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    return _thumbnail_success(job_id)
+
+
+@router.post("/{job_id}/thumbnail/text")
+async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
+    job_dir = _require_existing_job_dir(job_id)
+    thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
+
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Thumbnail text is required")
+    if req.position not in {"center", "top", "bottom"}:
+        raise HTTPException(status_code=400, detail="Invalid position")
+
+    text_color = _parse_hex_color(req.text_color, "text_color")
+    background_color = _parse_hex_color(req.background_color, "background_color")
+    font = _thumbnail_font(req.font_size)
+
+    try:
+        if os.path.isfile(thumbnail_path):
+            with Image.open(thumbnail_path) as existing:
+                image = existing.convert("RGB")
+        else:
+            image = Image.new("RGB", (1280, 720), background_color)
+
+        draw = ImageDraw.Draw(image)
+        text_box = draw.multiline_textbbox((0, 0), text, font=font, spacing=12, stroke_width=3)
+        text_width = text_box[2] - text_box[0]
+        text_height = text_box[3] - text_box[1]
+        x, y = _text_position(req.position, image.size, (text_width, text_height))
+
+        # TODO: Phase 3 drag-and-drop editor should let users place text visually.
+        draw.multiline_text(
+            (x, y),
+            text,
+            font=font,
+            fill=text_color,
+            spacing=12,
+            align="center",
+            stroke_width=3,
+            stroke_fill=(0, 0, 0),
+        )
+        image.save(thumbnail_path, format="JPEG", quality=92)
+    except OSError:
+        raise HTTPException(status_code=400, detail="Thumbnail could not be updated")
+
+    return _thumbnail_success(job_id)
 
 
 @router.delete("/{job_id}")

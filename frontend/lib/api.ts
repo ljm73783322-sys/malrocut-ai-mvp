@@ -147,6 +147,39 @@ export const deleteJob = async (jobId: string): Promise<DeleteJobResponse> => {
   return res.data;
 };
 
+
+// ─── 썸네일 편집 ──────────────────────────────────────────────────────────
+
+export interface ThumbnailTextPayload {
+  text: string;
+  font_size: number;
+  text_color: string;
+  background_color: string;
+  position: 'center' | 'top' | 'bottom';
+}
+
+export interface ThumbnailUpdateResponse {
+  ok: boolean;
+  job_id: string;
+  thumbnail_url: string;
+}
+
+export const uploadJobThumbnail = async (jobId: string, file: File): Promise<ThumbnailUpdateResponse> => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await api.post(`/jobs/${jobId}/thumbnail/upload`, formData);
+  return res.data;
+};
+
+export const updateJobThumbnailText = async (
+  jobId: string,
+  payload: ThumbnailTextPayload,
+): Promise<ThumbnailUpdateResponse> => {
+  const res = await api.post(`/jobs/${jobId}/thumbnail/text`, payload);
+  return res.data;
+};
+
 // ─── URL 생성 헬퍼 ────────────────────────────────────────────────────────
 
 /** 원본 영상 스트리밍 URL */

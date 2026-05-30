@@ -8,6 +8,14 @@ export default function Home() {
         영상을 올리고 클릭만 하시면<br/>
         자동으로 멋지게 편집해 드립니다.
       </h2>
+      <div className="flex flex-col sm:flex-row gap-4 items-center">
+        <Link href="/upload" className="bg-blue-600 text-white text-3xl font-bold py-6 px-12 rounded-2xl shadow-lg hover:bg-blue-700 transition">
+          시작하기 (영상 올리기)
+        </Link>
+        <Link href="/jobs" className="bg-white text-blue-600 border-2 border-blue-200 text-2xl font-bold py-5 px-8 rounded-2xl shadow hover:bg-blue-50 transition">
+          작업 히스토리 보기
+        </Link>
+      </div>
       <Link href="/upload" className="bg-blue-600 text-white text-3xl font-bold py-6 px-12 rounded-2xl shadow-lg hover:bg-blue-700 transition">
         시작하기 (영상 올리기)
       </Link>
