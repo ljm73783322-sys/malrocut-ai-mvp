@@ -73,6 +73,8 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
         <a 
           href={packageDownloadUrl}
           download={`malrocut-result-${params.job_id}.zip`}
+          role="button"
+          aria-label="전체 패키지 ZIP 다운로드"
           className="bg-purple-600 text-white text-3xl font-bold py-6 px-8 rounded-2xl shadow-lg hover:bg-purple-700 text-center"
         >
           📦 전체 패키지 ZIP 다운로드

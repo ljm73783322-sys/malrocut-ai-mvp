@@ -2,8 +2,12 @@ import uuid
 import os
 import zipfile
 import tempfile
+import json
+import shutil
+from datetime import datetime, timezone
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 from ..models.job import JobStatus
@@ -13,12 +17,129 @@ from ..utils.paths import get_job_dir, STORAGE_DIR
 router = APIRouter()
 
 
+VALID_JOB_STATUSES = {"completed", "failed", "rendering", "pending", "unknown"}
+
+
+def _storage_root() -> str:
+    root = os.path.abspath(STORAGE_DIR)
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _safe_job_dir_path(job_id: str) -> str:
+    """Return a safe job directory path without creating it."""
+    if not job_id or os.path.basename(job_id) != job_id:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+
+    storage_root = _storage_root()
+    job_dir = os.path.abspath(os.path.join(storage_root, job_id))
+
+    if os.path.commonpath([storage_root, job_dir]) != storage_root:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+
+    return job_dir
+
+
+def _iso_from_timestamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _read_job_json(job_dir: str) -> dict:
+    job_json_path = os.path.join(job_dir, "job.json")
+    if not os.path.isfile(job_json_path):
+        return {}
+
+    try:
+        with open(job_json_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _coerce_status(value: object, job_dir: str) -> str:
+    status = value if isinstance(value, str) else ""
+    if status in VALID_JOB_STATUSES:
+        return status
+    if os.path.isfile(os.path.join(job_dir, "edited_video.mp4")):
+        return "completed"
+    if os.path.isfile(os.path.join(job_dir, "input.mp4")):
+        return "pending"
+    return "unknown"
+
+
+def _coerce_progress(value: object, status: str) -> int:
+    try:
+        progress = int(value)
+    except (TypeError, ValueError):
+        progress = 100 if status == "completed" else 0
+    return max(0, min(100, progress))
+
+
+def _job_summary(job_id: str, job_dir: str) -> dict:
+    metadata = _read_job_json(job_dir)
+    stat = os.stat(job_dir)
+    fallback_time = _iso_from_timestamp(stat.st_mtime)
+    status = _coerce_status(metadata.get("status"), job_dir)
+
+    created_at = metadata.get("created_at") if isinstance(metadata.get("created_at"), str) else fallback_time
+    updated_at = metadata.get("updated_at") if isinstance(metadata.get("updated_at"), str) else fallback_time
+
+    has_video = os.path.isfile(os.path.join(job_dir, "edited_video.mp4"))
+    has_thumbnail = os.path.isfile(os.path.join(job_dir, "thumbnail.jpg"))
+    has_subtitle = os.path.isfile(os.path.join(job_dir, "subtitle.srt"))
+    has_job_json = os.path.isfile(os.path.join(job_dir, "job.json"))
+    has_edit_command = os.path.isfile(os.path.join(job_dir, "edit_command.json"))
+
+    return {
+        "job_id": job_id,
+        "status": status,
+        "progress": _coerce_progress(metadata.get("progress"), status),
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "has_video": has_video,
+        "has_thumbnail": has_thumbnail,
+        "has_subtitle": has_subtitle,
+        "has_job_json": has_job_json,
+        "has_edit_command": has_edit_command,
+        "video_download_url": f"/api/jobs/{job_id}/download/video",
+        "thumbnail_download_url": f"/api/jobs/{job_id}/download/thumbnail",
+        "subtitle_download_url": f"/api/jobs/{job_id}/download/subtitle",
+        "package_download_url": f"/api/jobs/{job_id}/download/package",
+        "result_url": f"/result/{job_id}",
+        "thumbnail_url": f"/api/jobs/{job_id}/thumbnail",
+    }
+
+
+@router.get("")
+@router.get("/")
+async def list_jobs():
+    storage_root = _storage_root()
+    summaries = []
+
+    for entry in os.scandir(storage_root):
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+
+        job_id = entry.name
+        try:
+            job_dir = _safe_job_dir_path(job_id)
+            if not os.path.isdir(job_dir):
+                continue
+            summaries.append(_job_summary(job_id, job_dir))
+        except (HTTPException, OSError):
+            continue
+
+    summaries.sort(key=lambda item: item["updated_at"], reverse=True)
+    return summaries
+
+
 def _safe_job_file_path(job_id: str, filename: str) -> str:
     """Return a safe file path inside backend/storage/jobs/<job_id>."""
     if os.path.basename(filename) != filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    storage_root = os.path.abspath(STORAGE_DIR)
+    storage_root = _storage_root()
     job_dir = os.path.abspath(os.path.join(storage_root, job_id))
     file_path = os.path.abspath(os.path.join(job_dir, filename))
 
@@ -94,7 +215,7 @@ async def get_status(job_id: str):
 
 def _build_result_package_response(job_id: str) -> FileResponse:
     """완성 결과물을 ZIP으로 묶어 반환합니다."""
-    storage_root = os.path.abspath(STORAGE_DIR)
+    storage_root = _storage_root()
     job_dir = os.path.abspath(os.path.join(storage_root, job_id))
 
     if os.path.commonpath([storage_root, job_dir]) != storage_root:
@@ -131,6 +252,7 @@ def _build_result_package_response(job_id: str) -> FileResponse:
         path=zip_path,
         filename=f"malrocut-result-{job_id}.zip",
         media_type="application/zip",
+        background=BackgroundTask(os.remove, zip_path),
     )
 
 
@@ -162,6 +284,17 @@ async def download_file(job_id: str, file_type: str):
 
     media_type = "video/mp4" if "video" in file_type else "image/jpeg" if file_type == "thumbnail" else "text/plain"
     return FileResponse(path=file_path, filename=filename, media_type=media_type)
+
+
+@router.delete("/{job_id}")
+async def delete_job(job_id: str):
+    job_dir = _safe_job_dir_path(job_id)
+
+    if os.path.islink(job_dir) or not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job folder not found")
+
+    shutil.rmtree(job_dir)
+    return {"ok": True, "deleted": True, "job_id": job_id}
 
 
 @router.get("/{job_id}/thumbnail")
