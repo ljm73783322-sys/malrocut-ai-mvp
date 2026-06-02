@@ -762,7 +762,22 @@ async def render_video_mock(job_id: str):
     update_job_status(job_id, "rendering", 70)
 
     # ── 썸네일 생성 ────────────────────────────────────────────────────────
+    # 새 렌더에서는 이전 편집 문구가 합성된 thumbnail.jpg를 재사용하지 않습니다.
+    try:
+        os.remove(thumbnail_path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"[render_service] 이전 thumbnail.jpg 삭제 실패: {exc}", file=sys.stderr)
+
     _ensure_valid_thumbnail(thumbnail_path, input_path)
+
+    thumbnail_base_path = os.path.join(job_dir, "thumbnail_base.jpg")
+    if _is_valid_thumbnail(thumbnail_path):
+        try:
+            shutil.copy2(thumbnail_path, thumbnail_base_path)
+        except OSError as exc:
+            print(f"[render_service] thumbnail_base.jpg 저장 실패: {exc}", file=sys.stderr)
 
     if not _is_valid_thumbnail(thumbnail_path):
         err = "thumbnail.jpg 생성 실패: 유효한 JPG를 만들지 못했습니다."
