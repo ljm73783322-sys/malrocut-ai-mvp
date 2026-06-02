@@ -156,6 +156,8 @@ export interface ThumbnailTextPayload {
   text_color: string;
   background_color: string;
   position: 'center' | 'top' | 'bottom';
+  position_x?: number;
+  position_y?: number;
   reset_base?: boolean;
 }
 
