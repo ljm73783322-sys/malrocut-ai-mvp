@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   getDownloadUrl,
+  getRepresentativeThumbnailBaseUrl,
   getRepresentativeThumbnailUrl,
   getResultPackageDownloadUrl,
   updateJobThumbnailText,
@@ -67,7 +68,9 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
 
   const videoUrl = getDownloadUrl(params.job_id, "video");
   const baseThumbnailUrl = getRepresentativeThumbnailUrl(params.job_id);
+  const baseThumbnailEditUrl = getRepresentativeThumbnailBaseUrl(params.job_id);
   const thumbnailUrl = `${baseThumbnailUrl}?v=${thumbnailVersion}`;
+  const thumbnailEditBackgroundUrl = `${baseThumbnailEditUrl}?v=${thumbnailVersion}`;
   const thumbnailDownloadUrl = getDownloadUrl(params.job_id, "thumbnail");
   const packageDownloadUrl = getResultPackageDownloadUrl(params.job_id);
   const initialTextPosition = getInitialTextPosition(
@@ -80,6 +83,9 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
     thumbnailTextPayload.position_y ?? initialTextPosition.y,
   );
   const hasThumbnailText = thumbnailTextPayload.text.trim().length > 0;
+  const previewThumbnailUrl = hasThumbnailText
+    ? thumbnailEditBackgroundUrl
+    : thumbnailUrl;
 
   const refreshThumbnail = () => {
     setThumbnailError(false);
@@ -237,6 +243,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
             className="relative mx-auto w-full max-w-3xl overflow-hidden rounded-2xl border-2 border-orange-100 bg-gray-100 shadow-lg"
           >
             <img
+              src={previewThumbnailUrl}
               src={thumbnailUrl}
               alt="유튜브 대표 썸네일 미리보기"
               className="block w-full object-cover"
@@ -251,6 +258,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
                 onPointerMove={handleTextPointerMove}
                 onPointerUp={handleTextPointerUp}
                 onPointerCancel={handleTextPointerUp}
+                className="absolute z-20 max-w-[90%] cursor-move select-none touch-none whitespace-pre-wrap rounded-lg px-4 py-2 text-center font-extrabold leading-tight shadow-lg ring-2 ring-white/70 pointer-events-auto"
                 className="absolute z-10 max-w-[90%] cursor-move select-none touch-none whitespace-pre-wrap rounded-lg px-4 py-2 text-center font-extrabold leading-tight shadow-lg ring-2 ring-white/70"
                 style={{
                   left: `${overlayPositionX}%`,
@@ -398,6 +406,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
           </div>
 
           <p className="mt-4 text-sm text-gray-500">
+            위 썸네일의 문구 박스를 드래그해서 위치를 조정하세요.
             위 썸네일에서 문구를 드래그해 위치를 조정하세요.
           </p>
           {thumbnailMessage && (
