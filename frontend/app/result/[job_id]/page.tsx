@@ -244,6 +244,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
           >
             <img
               src={previewThumbnailUrl}
+              src={thumbnailUrl}
               alt="유튜브 대표 썸네일 미리보기"
               className="block w-full object-cover"
               onError={() => setThumbnailError(true)}
@@ -258,6 +259,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
                 onPointerUp={handleTextPointerUp}
                 onPointerCancel={handleTextPointerUp}
                 className="absolute z-20 max-w-[90%] cursor-move select-none touch-none whitespace-pre-wrap rounded-lg px-4 py-2 text-center font-extrabold leading-tight shadow-lg ring-2 ring-white/70 pointer-events-auto"
+                className="absolute z-10 max-w-[90%] cursor-move select-none touch-none whitespace-pre-wrap rounded-lg px-4 py-2 text-center font-extrabold leading-tight shadow-lg ring-2 ring-white/70"
                 style={{
                   left: `${overlayPositionX}%`,
                   top: `${overlayPositionY}%`,
@@ -405,6 +407,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
 
           <p className="mt-4 text-sm text-gray-500">
             위 썸네일의 문구 박스를 드래그해서 위치를 조정하세요.
+            위 썸네일에서 문구를 드래그해 위치를 조정하세요.
           </p>
           {thumbnailMessage && (
             <p className="mt-3 rounded-lg bg-green-100 px-4 py-3 font-bold text-green-700">
