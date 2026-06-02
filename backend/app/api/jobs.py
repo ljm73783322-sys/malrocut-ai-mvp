@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
+from PIL import Image, ImageColor, ImageDraw, ImageFont, UnidentifiedImageError
 
 from ..models.job import JobStatus
 from ..services import job_store, video_service, edit_service, render_service, thumbnail_service
@@ -183,6 +184,14 @@ def _parse_hex_color(value: str, field_name: str) -> tuple[int, int, int]:
         int(color_value[2:4], 16),
         int(color_value[4:6], 16),
     )
+    try:
+        color = ImageColor.getrgb(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+    if len(color) == 4:
+        return color[:3]
+    return color
 
 
 def _parse_optional_background_color(value: str) -> tuple[int, int, int] | None:
@@ -426,6 +435,7 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     # text_color controls the rendered text glyphs.
     text_color = _parse_hex_color(req.text_color, "text_color")
     # background_color controls only the rectangle behind the text.
+    text_color = _parse_hex_color(req.text_color, "text_color")
     background_color = _parse_optional_background_color(req.background_color)
     font = _thumbnail_font(req.font_size)
 
@@ -455,6 +465,9 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
             # This must stay separate from the black stroke used only around glyphs.
             draw.rectangle(
                 _background_box_bounds(x, y, (text_width, text_height), image.size),
+            draw.rounded_rectangle(
+                _background_box_bounds(x, y, (text_width, text_height), image.size),
+                radius=18,
                 fill=background_color,
             )
 
