@@ -470,14 +470,7 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
                 image.size,
             )
             draw.rectangle(background_box, fill=background_color)
-            draw.rectangle(
-                _background_box_bounds(x, y, (text_width, text_height), image.size),
-            draw.rounded_rectangle(
-                _background_box_bounds(x, y, (text_width, text_height), image.size),
-                radius=18,
-                fill=background_color,
-            )
-
+     
         # TODO: Phase 3 drag-and-drop editor should let users place text visually.
         draw.multiline_text(
             (x, y),
