@@ -47,6 +47,12 @@ KOREAN_FONT_CANDIDATES = [
     r"C:\Windows\Fonts\batang.ttc",      # 바탕
     r"C:\Windows\Fonts\NanumGothic.ttf", # 나눔고딕 (선택 설치)
     r"C:\Windows\Fonts\arial.ttf",       # Arial (ASCII fallback)
+    "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+    "/Library/Fonts/AppleGothic.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ]
 
 
@@ -327,6 +333,17 @@ def _get_video_duration(video_path: str) -> float:
     return 60.0  # 실패 시 안전한 기본값 (너무 짧게 자르는 것 방지)
 
 
+def _format_srt_timestamp(seconds: float) -> str:
+    total_ms = max(0, int(round(seconds * 1000)))
+    hours = total_ms // 3_600_000
+    total_ms %= 3_600_000
+    minutes = total_ms // 60_000
+    total_ms %= 60_000
+    secs = total_ms // 1000
+    millis = total_ms % 1000
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
 def _load_edit_command(job_dir: str) -> dict:
     """
     edit_command.json을 읽어서 edit_command dict를 반환합니다.
@@ -358,47 +375,48 @@ def _load_edit_command(job_dir: str) -> dict:
         return default
 
 
-def _build_filtergraph_with_text(
-    font_path: str,
+def _build_correction_filtergraph(
     video_width: int,
     video_height: int,
     cmd: dict,
 ) -> str:
-    """
-    edit_command의 zoom/brightness/cover_subtitle_area 값을 반영하여
-    자막 텍스트 포함 filtergraph 문자열을 생성합니다.
-    """
-    esc_font   = _escape_ffmpeg_path(font_path)
-    font_size  = max(28, int(video_height * _subtitle_font_scale(cmd)))
-    text_y     = f"h-{max(14, int(video_height * 0.03))}-{font_size}"
-    bar_height = max(100, int(video_height * 0.18))
-    bar_y      = video_height - bar_height
-
-    zoom       = float(cmd.get("zoom") or 1.03)
-    # brightness=None → 사용자 미요청, 렌더링 시 기본값(0.06) 적용
+    """zoom/brightness/contrast/saturation 같은 보정 필터만 생성합니다."""
+    zoom = float(cmd.get("zoom") or 1.03)
+    # brightness=None → 사용자 미요청, 렌더링 시 기존 기본값(0.06) 유지
     brightness = float(cmd["brightness"]) if cmd.get("brightness") is not None else 0.06
-    contrast   = float(cmd["contrast"])   if cmd.get("contrast")   is not None else 1.05
-    cover_box  = cmd.get("cover_subtitle_area", True)
-    add_text   = cmd.get("add_subtitle", True)
+    contrast = float(cmd["contrast"]) if cmd.get("contrast") is not None else 1.05
+
+    filters = []
+    if zoom > 1.0:
+        filters.append(f"crop=iw/{zoom}:ih/{zoom},scale={video_width}:{video_height}")
+    filters.append(f"eq=brightness={brightness}:contrast={contrast}:saturation=1.1")
+    return ",".join(filters) if filters else "null"
+
+
+def _build_subtitle_filtergraph(
+    font_path: str | None,
+    video_height: int,
+    cmd: dict,
+    include_text: bool,
+) -> str:
+    """drawbox/drawtext 자막 필터만 생성합니다."""
+    font_size = max(28, int(video_height * _subtitle_font_scale(cmd)))
+    text_y = f"h-{max(14, int(video_height * 0.03))}-{font_size}"
+    bar_height = max(100, int(video_height * 0.18))
+    bar_y = video_height - bar_height
+
+    cover_box = cmd.get("cover_subtitle_area", True)
+    add_text = cmd.get("add_subtitle", True) and include_text and bool(font_path)
     subtitle_text = _subtitle_text_from_cmd(cmd).replace("'", "\\'")
 
     filters = []
-
-    # 1. 줌인 (zoom > 1.0 일 때만 crop)
-    if zoom > 1.0:
-        filters.append(f"crop=iw/{zoom}:ih/{zoom},scale={video_width}:{video_height}")
-
-    # 2. 밝기/대비/채도 보정
-    filters.append(f"eq=brightness={brightness}:contrast={contrast}:saturation=1.1")
-
-    # 3. 하단 반투명 검은 박스
     if cover_box:
         filters.append(
             f"drawbox=x=0:y={bar_y}:w=iw:h={bar_height}:color=black@0.70:t=fill"
         )
 
-    # 4. 자막 텍스트
     if add_text:
+        esc_font = _escape_ffmpeg_path(font_path or "")
         filters.append(
             f"drawtext=fontfile='{esc_font}'"
             f":text='{subtitle_text}'"
@@ -413,32 +431,34 @@ def _build_filtergraph_with_text(
     return ",".join(filters) if filters else "null"
 
 
+def _join_filter_parts(*parts: str) -> str:
+    filters = [part for part in parts if part and part != "null"]
+    return ",".join(filters) if filters else "null"
+
+
+def _build_filtergraph_with_text(
+    font_path: str,
+    video_width: int,
+    video_height: int,
+    cmd: dict,
+) -> str:
+    """기존 비-reorder 경로용: 보정 필터 뒤 자막 필터를 한 번 적용합니다."""
+    return _join_filter_parts(
+        _build_correction_filtergraph(video_width, video_height, cmd),
+        _build_subtitle_filtergraph(font_path, video_height, cmd, include_text=True),
+    )
+
+
 def _build_filtergraph_no_text(
     video_width: int,
     video_height: int,
     cmd: dict,
 ) -> str:
-    """
-    자막 없이 줌인 + 보정 + 박스만 적용하는 filtergraph.
-    drawtext 실패 시 fallback으로 사용.
-    """
-    bar_height = max(100, int(video_height * 0.18))
-    bar_y      = video_height - bar_height
-
-    zoom       = float(cmd.get("zoom") or 1.03)
-    brightness = float(cmd["brightness"]) if cmd.get("brightness") is not None else 0.06
-    contrast   = float(cmd["contrast"])   if cmd.get("contrast")   is not None else 1.05
-    cover_box  = cmd.get("cover_subtitle_area", True)
-
-    filters = []
-    if zoom > 1.0:
-        filters.append(f"crop=iw/{zoom}:ih/{zoom},scale={video_width}:{video_height}")
-    filters.append(f"eq=brightness={brightness}:contrast={contrast}:saturation=1.1")
-    if cover_box:
-        filters.append(
-            f"drawbox=x=0:y={bar_y}:w=iw:h={bar_height}:color=black@0.70:t=fill"
-        )
-    return ",".join(filters) if filters else "null"
+    """기존 비-reorder fallback용: 보정 + 박스만 적용하고 drawtext는 제외합니다."""
+    return _join_filter_parts(
+        _build_correction_filtergraph(video_width, video_height, cmd),
+        _build_subtitle_filtergraph(None, video_height, cmd, include_text=False),
+    )
 
 
 def _video_normalize_filter(fps: int = 30) -> str:
@@ -447,18 +467,16 @@ def _video_normalize_filter(fps: int = 30) -> str:
 
 
 def _build_reorder_filtergraph(
-    base_vf: str,
+    correction_vf: str,
+    subtitle_vf: str,
     duration: float,
     clip_reorder: dict,
-    video_width: int,
-    video_height: int,
 ) -> str:
     """
     원본을 여러 구간으로 자른 뒤 요청된 순서대로 이어붙이는 filter_complex 문자열을 생성합니다.
 
-    concat은 모든 입력 비디오 스트림의 해상도, SAR, DAR, FPS, pixel format이 같아야 하므로
-    각 trim 구간마다 base_vf(zoom/brightness/drawbox/drawtext)를 적용한 뒤 동일한
-    scale/setsar/setdar/fps/format 정규화를 거쳐 concat에 전달합니다.
+    reorder 경로에서는 각 세그먼트에 trim/setpts/normalize와 보정(correction)만 적용하고,
+    drawbox/drawtext 자막 필터는 concat 이후 최종 비디오 스트림에 한 번만 적용합니다.
     """
     clips = clip_reorder.get("clips", [])
     if len(clips) != 2:
@@ -470,25 +488,28 @@ def _build_reorder_filtergraph(
     s1, e1 = float(c1["source_start"]), float(c1["source_end"])
     s2, e2 = float(c2["source_start"]), float(c2["source_end"])
 
-    # duration을 넘지 않도록 제한
     e1 = min(e1, duration)
     e2 = min(e2, duration)
+
     if e1 <= s1 or e2 <= s2:
+        print("[render_service] clip_reorder invalid range", file=sys.stderr)
+        return ""
+    if e1 > s2:
+        print("[render_service] clip_reorder overlapping ranges are not supported", file=sys.stderr)
         return ""
 
-    # 잘라낼 구간 정의 (순서대로)
     segments = [
         (0.0, s1),
-        (s2, e2),  # 순서 바뀜: 뒷부분
-        (e1, s2),
-        (s1, e1),  # 순서 바뀜: 앞부분
+        (s2, e2),  # 순서 바뀜: 뒤 구간(B)
+        (e1, s2),  # 인접(e1 == s2)이면 길이 0이라 정상적으로 제외됨
+        (s1, e1),  # 순서 바뀜: 앞 구간(A)
         (e2, duration),
     ]
 
     valid_segments = []
-    for s, e in segments:
-        if e - s > 0.1:  # 0.1초 이상인 구간만 포함 (빈 구간 방지)
-            valid_segments.append((s, e))
+    for start, end in segments:
+        if end - start > 0.001:
+            valid_segments.append((start, end))
 
     if not valid_segments:
         return ""
@@ -497,21 +518,24 @@ def _build_reorder_filtergraph(
     concat_inputs = []
     normalize_vf = _video_normalize_filter()
 
-    for i, (s, e) in enumerate(valid_segments):
-        # Video: trim 후 효과를 적용하고 concat 직전에 해상도/SAR/DAR/FPS/pixel format을 통일합니다.
-        video_filters = [f"trim=start={s}:end={e}", "setpts=PTS-STARTPTS"]
-        if base_vf and base_vf != "null":
-            video_filters.append(base_vf)
+    for i, (start, end) in enumerate(valid_segments):
+        video_filters = [f"trim=start={start}:end={end}", "setpts=PTS-STARTPTS"]
+        if correction_vf and correction_vf != "null":
+            video_filters.append(correction_vf)
         video_filters.append(normalize_vf)
         fg.append(f"[0:v]{','.join(video_filters)}[v{i}]")
 
-        # Audio
-        fg.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
+        fg.append(f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{i}]")
         concat_inputs.append(f"[v{i}][a{i}]")
 
     n = len(valid_segments)
     concat_str = "".join(concat_inputs)
-    fg.append(f"{concat_str}concat=n={n}:v=1:a=1[outv][outa]")
+    fg.append(f"{concat_str}concat=n={n}:v=1:a=1[concatv][outa]")
+
+    if subtitle_vf and subtitle_vf != "null":
+        fg.append(f"[concatv]{subtitle_vf}[outv]")
+    else:
+        fg.append("[concatv]null[outv]")
 
     return ";".join(fg)
 
@@ -527,10 +551,7 @@ def _ffmpeg_render(
     """
     FFmpeg로 영상을 렌더링합니다. edit_command의 설정을 반영합니다.
 
-    시도 순서:
-    1. 자막(drawtext) 포함 filtergraph + 한글 폰트
-    2. 자막 없는 filtergraph (drawtext 지원 없는 FFmpeg 빌드 대비)
-    3. 모두 실패 시 False 반환
+    reorder 경로는 세그먼트별 correction 후 concat하고, subtitle 필터는 concat 결과에 1회 적용합니다.
     """
     font_path = _find_korean_font()
     cr = cmd.get("clip_reorder", {})
@@ -546,18 +567,21 @@ def _ffmpeg_render(
         "-b:a", "128k",
     ]
 
-    def _try_render(vf_str: str) -> bool:
+    def _try_render(correction_vf: str, subtitle_vf: str) -> bool:
         if use_reorder:
-            fc = _build_reorder_filtergraph(vf_str, duration, cr, video_width, video_height)
-            if fc:
-                args = base_args.copy()
-                args.extend(["-filter_complex", fc, "-map", "[outv]", "-map", "[outa]", output_path])
-                ok = _run_ffmpeg(args)
-                if ok and _is_valid_video(output_path):
-                    return True
+            fc = _build_reorder_filtergraph(correction_vf, subtitle_vf, duration, cr)
+            if not fc:
                 _remove_if_invalid(output_path)
                 return False
-        # reorder 안 할 때
+            args = base_args.copy()
+            args.extend(["-filter_complex", fc, "-map", "[outv]", "-map", "[outa]", output_path])
+            ok = _run_ffmpeg(args)
+            if ok and _is_valid_video(output_path):
+                return True
+            _remove_if_invalid(output_path)
+            return False
+
+        vf_str = _join_filter_parts(correction_vf, subtitle_vf)
         if vf_str != "null":
             ok = _run_ffmpeg(base_args + ["-vf", vf_str, output_path])
             if ok and _is_valid_video(output_path):
@@ -566,22 +590,22 @@ def _ffmpeg_render(
             return False
         return False
 
+    correction_vf = _build_correction_filtergraph(video_width, video_height, cmd)
+
     # 시도 1: 자막 포함
     if font_path:
-        vf = _build_filtergraph_with_text(font_path, video_width, video_height, cmd)
-        if _try_render(vf):
+        subtitle_vf = _build_subtitle_filtergraph(font_path, video_height, cmd, include_text=True)
+        if _try_render(correction_vf, subtitle_vf):
             return True
         _remove_if_invalid(output_path)
 
-    # 시도 2: 자막 없음
-    vf = _build_filtergraph_no_text(video_width, video_height, cmd)
-    if _try_render(vf):
+    # 시도 2: drawtext 없는 fallback (박스는 유지)
+    subtitle_vf = _build_subtitle_filtergraph(None, video_height, cmd, include_text=False)
+    if _try_render(correction_vf, subtitle_vf):
         return True
     _remove_if_invalid(output_path)
 
     # 시도 3: 실제 편집 명령이 없을 때만 필터 없이 단순 재인코딩을 허용합니다.
-    # clip_reorder 등 편집 명령이 있는데 여기까지 왔다면 효과 적용 렌더링이 실패한
-    # 것이므로, 재인코딩 결과를 completed로 오인하지 않도록 False를 반환합니다.
     if _has_effective_edits(cmd):
         _remove_if_invalid(output_path)
         return False
@@ -759,7 +783,7 @@ async def render_video_mock(job_id: str):
         with open(subtitle_path, "w", encoding="utf-8") as f:
             f.write(
                 "1\n"
-                "00:00:00,000 --> 00:00:05,000\n"
+                f"00:00:00,000 --> {_format_srt_timestamp(duration)}\n"
                 f"{subtitle_text}\n"
                 "\n"
             )

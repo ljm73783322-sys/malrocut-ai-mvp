@@ -47,7 +47,7 @@ def _parse_clip_reorder(prompt: str) -> dict | None:
     if s1 >= e1 or s2 >= e2:
         return None
 
-    # 구간이 겹치지 않게 정렬
+    # 구간이 겹치지 않게 정렬. 인접(e1 == s2)은 허용하고, 실제 겹침(e1 > s2)만 거부합니다.
     if s1 > s2:
         s1, e1, s2, e2 = s2, e2, s1, e1
 
@@ -55,6 +55,14 @@ def _parse_clip_reorder(prompt: str) -> dict | None:
         {"id": "clip_1", "source_start": s1, "source_end": e1, "new_order": 2},
         {"id": "clip_2", "source_start": s2, "source_end": e2, "new_order": 1},
     ]
+
+    if e1 > s2:
+        return {
+            "enabled": True,
+            "clips": clips,
+            "invalid_reason": "overlap",
+            "error": "겹치는 구간은 현재 A/B 교체 구조에서 지원하지 않습니다.",
+        }
 
     return {"enabled": True, "clips": clips}
 
@@ -163,7 +171,9 @@ def _build_plan_items(cmd: dict, prompt: str) -> list[str]:
     cr = cmd.get("clip_reorder")
     if cr and cr.get("enabled"):
         clips = cr.get("clips", [])
-        if len(clips) >= 2:
+        if cr.get("invalid_reason") == "overlap":
+            items.append(cr.get("error") or "겹치는 구간은 지원하지 않습니다.")
+        elif len(clips) >= 2:
             sorted_clips = sorted(clips, key=lambda c: c["source_start"])
             a, b = sorted_clips[0], sorted_clips[1]
             items.append(
