@@ -10,7 +10,6 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
-from PIL import Image, ImageColor, ImageDraw, ImageFont, UnidentifiedImageError
 
 from ..models.job import JobStatus
 from ..services import job_store, video_service, edit_service, render_service, thumbnail_service
@@ -20,6 +19,8 @@ router = APIRouter()
 
 
 VALID_JOB_STATUSES = {"completed", "failed", "rendering", "pending", "unknown"}
+THUMBNAIL_BASE_FILENAME = "thumbnail_base.jpg"
+DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO = 0.24
 
 
 def _storage_root() -> str:
@@ -220,19 +221,82 @@ def _thumbnail_font(size: int):
     return ImageFont.load_default()
 
 
+def _clamp_number(value: float, minimum: float, maximum: float) -> float:
+    return min(maximum, max(minimum, value))
+
+
 def _text_position(position: str, image_size: tuple[int, int], text_size: tuple[int, int]) -> tuple[int, int]:
     width, height = image_size
     text_width, text_height = text_size
-    x = min(max(40, (width - text_width) // 2), max(40, width - text_width - 40))
+    x = int(_clamp_number((width - text_width) / 2, 0, max(0, width - text_width)))
 
     if position == "top":
-        y = 80
+        y = int(_clamp_number(height * 0.2 - text_height / 2, 0, max(0, height - text_height)))
     elif position == "bottom":
-        y = max(40, height - text_height - 90)
+        y = int(_clamp_number(height * 0.8 - text_height / 2, 0, max(0, height - text_height)))
     else:
-        y = max(40, (height - text_height) // 2)
+        y = int(_clamp_number((height - text_height) / 2, 0, max(0, height - text_height)))
 
     return x, y
+
+
+def _text_position_from_percent(
+    position_x: float,
+    position_y: float,
+    image_size: tuple[int, int],
+    text_bbox: tuple[int, int, int, int],
+) -> tuple[int, int]:
+    image_width, image_height = image_size
+    bbox_left, bbox_top, bbox_right, bbox_bottom = text_bbox
+    text_width = bbox_right - bbox_left
+    text_height = bbox_bottom - bbox_top
+
+    center_x = (_clamp_number(float(position_x), 0, 100) / 100) * image_width
+    center_y = (_clamp_number(float(position_y), 0, 100) / 100) * image_height
+    box_left = _clamp_number(center_x - text_width / 2, 0, max(0, image_width - text_width))
+    box_top = _clamp_number(center_y - text_height / 2, 0, max(0, image_height - text_height))
+
+    return int(round(box_left - bbox_left)), int(round(box_top - bbox_top))
+
+
+def _thumbnail_base_path(job_dir: str) -> str:
+    return os.path.join(job_dir, THUMBNAIL_BASE_FILENAME)
+
+
+def _read_edit_command(job_dir: str) -> dict:
+    edit_command_path = os.path.join(job_dir, "edit_command.json")
+    if not os.path.isfile(edit_command_path):
+        return {}
+
+    try:
+        with open(edit_command_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _thumbnail_subtitle_cover_ratio(job_dir: str) -> float:
+    cmd = _read_edit_command(job_dir)
+    if cmd.get("cover_subtitle_area", True) is False:
+        return 0
+
+    try:
+        ratio = float(cmd.get("subtitle_cover_ratio", DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO))
+    except (TypeError, ValueError):
+        ratio = DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO
+    return _clamp_number(ratio, 0, 0.5)
+
+
+def _draw_thumbnail_subtitle_cover(draw: ImageDraw.ImageDraw, image_size: tuple[int, int], job_dir: str) -> None:
+    ratio = _thumbnail_subtitle_cover_ratio(job_dir)
+    if ratio <= 0:
+        return
+
+    image_width, image_height = image_size
+    cover_height = max(1, int(image_height * ratio))
+    cover_top = max(0, image_height - cover_height)
+    draw.rectangle((0, cover_top, image_width, image_height), fill=(0, 0, 0))
 
 
 def _background_box_bounds(
@@ -287,6 +351,8 @@ class ThumbnailTextRequest(BaseModel):
     text_color: str = "#FFFF00"
     background_color: str = "#000000"
     position: str = "center"
+    position_x: float | None = None
+    position_y: float | None = None
     reset_base: bool = False
 
 
@@ -407,7 +473,7 @@ async def upload_job_thumbnail(job_id: str, file: UploadFile = File(...)):
 
     thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
 
-    base_path = os.path.join(job_dir, "thumbnail_base.jpg")
+    base_path = _thumbnail_base_path(job_dir)
 
     try:
         with Image.open(file.file) as image:
@@ -424,7 +490,7 @@ async def upload_job_thumbnail(job_id: str, file: UploadFile = File(...)):
 async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     job_dir = _require_existing_job_dir(job_id)
     thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
-    base_path = os.path.join(job_dir, "thumbnail_base.jpg")
+    base_path = _thumbnail_base_path(job_dir)
 
     text = req.text.strip()
     if not text:
@@ -435,15 +501,10 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     # text_color controls the rendered text glyphs.
     text_color = _parse_hex_color(req.text_color, "text_color")
     # background_color controls only the rectangle behind the text.
-    text_color = _parse_hex_color(req.text_color, "text_color")
     background_color = _parse_optional_background_color(req.background_color)
     font = _thumbnail_font(req.font_size)
 
     try:
-        if req.reset_base and os.path.isfile(thumbnail_path):
-            with Image.open(thumbnail_path) as current:
-                current.convert("RGB").save(base_path, format="JPEG", quality=92)
-
         if not os.path.isfile(base_path) and os.path.isfile(thumbnail_path):
             with Image.open(thumbnail_path) as current:
                 current.convert("RGB").save(base_path, format="JPEG", quality=92)
@@ -455,10 +516,14 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
             image = Image.new("RGB", (1280, 720), (24, 24, 24))
 
         draw = ImageDraw.Draw(image)
+        _draw_thumbnail_subtitle_cover(draw, image.size, job_dir)
         text_box = draw.multiline_textbbox((0, 0), text, font=font, spacing=12, stroke_width=3)
         text_width = text_box[2] - text_box[0]
         text_height = text_box[3] - text_box[1]
-        x, y = _text_position(req.position, image.size, (text_width, text_height))
+        if req.position_x is not None and req.position_y is not None:
+            x, y = _text_position_from_percent(req.position_x, req.position_y, image.size, text_box)
+        else:
+            x, y = _text_position(req.position, image.size, (text_width, text_height))
 
         if background_color is not None:
             # Draw the selected background_color as the text box fill.
@@ -470,8 +535,7 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
                 image.size,
             )
             draw.rectangle(background_box, fill=background_color)
-     
-        # TODO: Phase 3 drag-and-drop editor should let users place text visually.
+
         draw.multiline_text(
             (x, y),
             text,
@@ -509,6 +573,36 @@ async def get_representative_thumbnail(job_id: str):
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
     return FileResponse(path=file_path, filename=filename, media_type="image/jpeg")
+
+
+@router.get("/{job_id}/thumbnail/base")
+async def get_representative_thumbnail_base(job_id: str):
+    """문구 편집용 base 썸네일을 반환하되 기존 자막 영역은 가립니다."""
+    job_dir = _require_existing_job_dir(job_id)
+    base_path = _thumbnail_base_path(job_dir)
+    thumbnail_path = _safe_job_file_path(job_id, "thumbnail.jpg")
+    source_path = base_path if os.path.isfile(base_path) else thumbnail_path
+    if not os.path.exists(source_path):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+    try:
+        with Image.open(source_path) as source_image:
+            image = source_image.convert("RGB")
+            draw = ImageDraw.Draw(image)
+            _draw_thumbnail_subtitle_cover(draw, image.size, job_dir)
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+            tmp_path = tmp.name
+            tmp.close()
+            image.save(tmp_path, format="JPEG", quality=92)
+    except OSError:
+        raise HTTPException(status_code=400, detail="Thumbnail could not be loaded")
+
+    return FileResponse(
+        path=tmp_path,
+        filename="thumbnail_base.jpg",
+        media_type="image/jpeg",
+        background=BackgroundTask(os.remove, tmp_path),
+    )
 
 
 # ---------------------------------------------------------------------------

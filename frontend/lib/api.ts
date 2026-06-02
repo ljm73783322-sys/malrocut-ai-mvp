@@ -156,6 +156,8 @@ export interface ThumbnailTextPayload {
   text_color: string;
   background_color: string;
   position: 'center' | 'top' | 'bottom';
+  position_x?: number;
+  position_y?: number;
   reset_base?: boolean;
 }
 
@@ -199,6 +201,10 @@ export const getDownloadUrl = (jobId: string, fileType: "video" | "thumbnail" | 
 /** 대표 썸네일 미리보기 URL */
 export const getRepresentativeThumbnailUrl = (jobId: string): string =>
   `${API_BASE_URL}/api/jobs/${jobId}/thumbnail`;
+
+/** 텍스트가 합성되지 않은 대표 썸네일 편집용 배경 URL */
+export const getRepresentativeThumbnailBaseUrl = (jobId: string): string =>
+  `${API_BASE_URL}/api/jobs/${jobId}/thumbnail/base`;
 
 
 /** 결과 패키지 ZIP 다운로드 URL */
