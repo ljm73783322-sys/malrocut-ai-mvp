@@ -10,7 +10,6 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
-from PIL import Image, ImageColor, ImageDraw, ImageFont, UnidentifiedImageError
 
 from ..models.job import JobStatus
 from ..services import job_store, video_service, edit_service, render_service, thumbnail_service
@@ -220,19 +219,42 @@ def _thumbnail_font(size: int):
     return ImageFont.load_default()
 
 
+def _clamp_number(value: float, minimum: float, maximum: float) -> float:
+    return min(maximum, max(minimum, value))
+
+
 def _text_position(position: str, image_size: tuple[int, int], text_size: tuple[int, int]) -> tuple[int, int]:
     width, height = image_size
     text_width, text_height = text_size
-    x = min(max(40, (width - text_width) // 2), max(40, width - text_width - 40))
+    x = int(_clamp_number((width - text_width) / 2, 0, max(0, width - text_width)))
 
     if position == "top":
-        y = 80
+        y = int(_clamp_number(height * 0.2 - text_height / 2, 0, max(0, height - text_height)))
     elif position == "bottom":
-        y = max(40, height - text_height - 90)
+        y = int(_clamp_number(height * 0.8 - text_height / 2, 0, max(0, height - text_height)))
     else:
-        y = max(40, (height - text_height) // 2)
+        y = int(_clamp_number((height - text_height) / 2, 0, max(0, height - text_height)))
 
     return x, y
+
+
+def _text_position_from_percent(
+    position_x: float,
+    position_y: float,
+    image_size: tuple[int, int],
+    text_bbox: tuple[int, int, int, int],
+) -> tuple[int, int]:
+    image_width, image_height = image_size
+    bbox_left, bbox_top, bbox_right, bbox_bottom = text_bbox
+    text_width = bbox_right - bbox_left
+    text_height = bbox_bottom - bbox_top
+
+    center_x = (_clamp_number(float(position_x), 0, 100) / 100) * image_width
+    center_y = (_clamp_number(float(position_y), 0, 100) / 100) * image_height
+    box_left = _clamp_number(center_x - text_width / 2, 0, max(0, image_width - text_width))
+    box_top = _clamp_number(center_y - text_height / 2, 0, max(0, image_height - text_height))
+
+    return int(round(box_left - bbox_left)), int(round(box_top - bbox_top))
 
 
 def _background_box_bounds(
@@ -287,6 +309,8 @@ class ThumbnailTextRequest(BaseModel):
     text_color: str = "#FFFF00"
     background_color: str = "#000000"
     position: str = "center"
+    position_x: float | None = None
+    position_y: float | None = None
     reset_base: bool = False
 
 
@@ -435,7 +459,6 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     # text_color controls the rendered text glyphs.
     text_color = _parse_hex_color(req.text_color, "text_color")
     # background_color controls only the rectangle behind the text.
-    text_color = _parse_hex_color(req.text_color, "text_color")
     background_color = _parse_optional_background_color(req.background_color)
     font = _thumbnail_font(req.font_size)
 
@@ -458,7 +481,10 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
         text_box = draw.multiline_textbbox((0, 0), text, font=font, spacing=12, stroke_width=3)
         text_width = text_box[2] - text_box[0]
         text_height = text_box[3] - text_box[1]
-        x, y = _text_position(req.position, image.size, (text_width, text_height))
+        if req.position_x is not None and req.position_y is not None:
+            x, y = _text_position_from_percent(req.position_x, req.position_y, image.size, text_box)
+        else:
+            x, y = _text_position(req.position, image.size, (text_width, text_height))
 
         if background_color is not None:
             # Draw the selected background_color as the text box fill.
@@ -470,8 +496,7 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
                 image.size,
             )
             draw.rectangle(background_box, fill=background_color)
-     
-        # TODO: Phase 3 drag-and-drop editor should let users place text visually.
+
         draw.multiline_text(
             (x, y),
             text,
