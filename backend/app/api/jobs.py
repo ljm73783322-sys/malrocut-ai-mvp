@@ -20,7 +20,7 @@ router = APIRouter()
 
 VALID_JOB_STATUSES = {"completed", "failed", "rendering", "pending", "unknown"}
 THUMBNAIL_BASE_FILENAME = "thumbnail_base.jpg"
-DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO = 0.24
+DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO = 0.30
 
 
 def _storage_root() -> str:
@@ -278,8 +278,6 @@ def _read_edit_command(job_dir: str) -> dict:
 
 def _thumbnail_subtitle_cover_ratio(job_dir: str) -> float:
     cmd = _read_edit_command(job_dir)
-    if cmd.get("cover_subtitle_area", True) is False:
-        return 0
 
     try:
         ratio = float(cmd.get("subtitle_cover_ratio", DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO))
@@ -287,6 +285,18 @@ def _thumbnail_subtitle_cover_ratio(job_dir: str) -> float:
         ratio = DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO
     return _clamp_number(ratio, 0, 0.5)
 
+
+def _ensure_thumbnail_base(job_dir: str) -> str:
+    """Ensure an untexted thumbnail base exists without copying a possibly polluted thumbnail.jpg."""
+    base_path = _thumbnail_base_path(job_dir)
+    if os.path.isfile(base_path):
+        return base_path
+
+    input_path = os.path.join(job_dir, "input.mp4")
+    render_service._ensure_valid_thumbnail(base_path, input_path)
+    if not os.path.isfile(base_path):
+        raise HTTPException(status_code=404, detail="Thumbnail base not found")
+    return base_path
 
 def _draw_thumbnail_subtitle_cover(draw: ImageDraw.ImageDraw, image_size: tuple[int, int], job_dir: str) -> None:
     ratio = _thumbnail_subtitle_cover_ratio(job_dir)
@@ -490,7 +500,6 @@ async def upload_job_thumbnail(job_id: str, file: UploadFile = File(...)):
 async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     job_dir = _require_existing_job_dir(job_id)
     thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
-    base_path = _thumbnail_base_path(job_dir)
 
     text = req.text.strip()
     if not text:
@@ -505,15 +514,9 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     font = _thumbnail_font(req.font_size)
 
     try:
-        if not os.path.isfile(base_path) and os.path.isfile(thumbnail_path):
-            with Image.open(thumbnail_path) as current:
-                current.convert("RGB").save(base_path, format="JPEG", quality=92)
-
-        if os.path.isfile(base_path):
-            with Image.open(base_path) as base_image:
-                image = base_image.convert("RGB")
-        else:
-            image = Image.new("RGB", (1280, 720), (24, 24, 24))
+        base_path = _ensure_thumbnail_base(job_dir)
+        with Image.open(base_path) as base_image:
+            image = base_image.convert("RGB")
 
         draw = ImageDraw.Draw(image)
         _draw_thumbnail_subtitle_cover(draw, image.size, job_dir)
@@ -579,13 +582,8 @@ async def get_representative_thumbnail(job_id: str):
 async def get_representative_thumbnail_base(job_id: str):
     """문구 편집용 base 썸네일을 반환하되 기존 자막 영역은 가립니다."""
     job_dir = _require_existing_job_dir(job_id)
-    base_path = _thumbnail_base_path(job_dir)
-    thumbnail_path = _safe_job_file_path(job_id, "thumbnail.jpg")
-    source_path = base_path if os.path.isfile(base_path) else thumbnail_path
-    if not os.path.exists(source_path):
-        raise HTTPException(status_code=404, detail="Thumbnail not found")
-
     try:
+        source_path = _ensure_thumbnail_base(job_dir)
         with Image.open(source_path) as source_image:
             image = source_image.convert("RGB")
             draw = ImageDraw.Draw(image)
