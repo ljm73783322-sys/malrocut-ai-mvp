@@ -432,7 +432,6 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
 
           <p className="mt-4 text-sm text-gray-500">
             위 썸네일의 문구 박스를 드래그해서 위치를 조정하세요.
-            위 썸네일에서 문구를 드래그해 위치를 조정하세요.
           </p>
           {thumbnailMessage && (
             <p className="mt-3 rounded-lg bg-green-100 px-4 py-3 font-bold text-green-700">

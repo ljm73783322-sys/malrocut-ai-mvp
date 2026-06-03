@@ -23,6 +23,7 @@ VALID_JOB_STATUSES = {"completed", "failed", "rendering", "pending", "unknown"}
 THUMBNAIL_BASE_FILENAME = "thumbnail_base.jpg"
 THUMBNAIL_UPLOADED_BASE_FILENAME = "thumbnail_uploaded_base.jpg"
 DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO = 0.30
+DEFAULT_THUMBNAIL_SUBTITLE_COVER_CENTER_Y = 0.68
 
 
 def _storage_root() -> str:
@@ -351,8 +352,15 @@ def _draw_thumbnail_subtitle_cover(draw: ImageDraw.ImageDraw, image_size: tuple[
 
     image_width, image_height = image_size
     cover_height = max(1, int(image_height * ratio))
-    cover_top = max(0, image_height - cover_height)
-    draw.rectangle((0, cover_top, image_width, image_height), fill=(0, 0, 0))
+
+    # 기존 자막은 맨 아래가 아니라 화면 중하단에 위치하는 경우가 많습니다.
+    # 하단 30%만 덮으면 y=70% 위쪽 자막 픽셀이 남을 수 있으므로,
+    # 기본 30% band를 화면 높이 68% 중심에 배치해 대략 53%~83%를 가립니다.
+    cover_center_y = int(image_height * DEFAULT_THUMBNAIL_SUBTITLE_COVER_CENTER_Y)
+    cover_top = int(cover_center_y - cover_height / 2)
+    cover_top = int(_clamp_number(cover_top, 0, max(0, image_height - cover_height)))
+    cover_bottom = min(image_height, cover_top + cover_height)
+    draw.rectangle((0, cover_top, image_width, cover_bottom), fill=(0, 0, 0))
 
 
 def _background_box_bounds(
