@@ -312,6 +312,8 @@ def _save_image_as_jpeg(source_path: str, destination_path: str) -> None:
         source_image.convert("RGB").save(destination_path, format="JPEG", quality=92)
 
 
+def _ensure_thumbnail_base(job_dir: str) -> str:
+    """Ensure thumbnail_base.jpg exists using the trusted source priority order."""
 def regenerate_thumbnail_base(job_id: str) -> str:
     """Regenerate a clean base thumbnail without trusting a possibly text-composited thumbnail.jpg."""
     job_dir = _require_existing_job_dir(job_id)
@@ -320,6 +322,7 @@ def regenerate_thumbnail_base(job_id: str) -> str:
     uploaded_base_path = _thumbnail_uploaded_base_path(job_dir)
     input_path = os.path.join(job_dir, "input.mp4")
     thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
+    job_id = os.path.basename(job_dir)
 
     if os.path.isfile(selected_base_path):
         _save_image_as_jpeg(selected_base_path, base_path)
@@ -353,6 +356,13 @@ def regenerate_thumbnail_base(job_id: str) -> str:
     raise HTTPException(status_code=404, detail="Thumbnail base not found")
 
 
+def regenerate_thumbnail_base(job_id: str) -> str:
+    """Regenerate a clean base thumbnail without trusting a possibly text-composited thumbnail.jpg."""
+    job_dir = _require_existing_job_dir(job_id)
+    return _ensure_thumbnail_base(job_dir)
+
+
+def _thumbnail_subtitle_cover_bounds(image_size: tuple[int, int], job_dir: str) -> tuple[int, int, int, int] | None:
 def _thumbnail_subtitle_cover_bounds(image_size: tuple[int, int], job_dir: str) -> tuple[int, int, int, int] | None:
 def _ensure_thumbnail_base(job_dir: str) -> str:
     """Ensure an untexted thumbnail base exists without copying a possibly polluted thumbnail.jpg."""
@@ -704,6 +714,32 @@ async def regenerate_representative_thumbnail_base(job_id: str):
 
 @router.post("/{job_id}/thumbnail/base/select")
 async def select_representative_thumbnail_base(job_id: str, req: ThumbnailBaseSelectRequest):
+    job_dir = _require_existing_job_dir(job_id)
+    filename = req.filename
+    if os.path.basename(filename) != filename or not filename.lower().endswith(".jpg"):
+        raise HTTPException(status_code=400, detail="Invalid thumbnail filename")
+
+    source_path = os.path.join(job_dir, "thumbnails", filename)
+    if not os.path.isfile(source_path):
+        raise HTTPException(status_code=404, detail="Thumbnail candidate not found")
+
+    base_path = _thumbnail_base_path(job_dir)
+    selected_base_path = _thumbnail_selected_base_path(job_dir)
+    try:
+        _save_image_as_jpeg(source_path, base_path)
+        _save_image_as_jpeg(source_path, selected_base_path)
+    except OSError:
+        raise HTTPException(status_code=400, detail="Thumbnail candidate could not be selected")
+
+    return _thumbnail_success(job_id)
+
+
+@router.get("/{job_id}/thumbnail/base")
+async def get_representative_thumbnail_base(job_id: str, cover_style: str = DEFAULT_THUMBNAIL_COVER_STYLE):
+    """문구 편집용 base 썸네일을 반환하되 기존 자막 영역은 선택한 방식으로 정리합니다."""
+    job_dir = _require_existing_job_dir(job_id)
+    try:
+        source_path = regenerate_thumbnail_base(job_id)
     job_dir = _require_existing_job_dir(job_id)
     filename = req.filename
     if os.path.basename(filename) != filename or not filename.lower().endswith(".jpg"):
