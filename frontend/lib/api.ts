@@ -150,6 +150,8 @@ export const deleteJob = async (jobId: string): Promise<DeleteJobResponse> => {
 
 // ─── 썸네일 편집 ──────────────────────────────────────────────────────────
 
+export type ThumbnailCoverStyle = 'black_box' | 'blur' | 'dim' | 'none';
+
 export interface ThumbnailTextPayload {
   text: string;
   font_size: number;
@@ -159,6 +161,7 @@ export interface ThumbnailTextPayload {
   position_x?: number;
   position_y?: number;
   reset_base?: boolean;
+  cover_style?: ThumbnailCoverStyle;
 }
 
 export interface ThumbnailUpdateResponse {
@@ -180,6 +183,16 @@ export const updateJobThumbnailText = async (
   payload: ThumbnailTextPayload,
 ): Promise<ThumbnailUpdateResponse> => {
   const res = await api.post(`/jobs/${jobId}/thumbnail/text`, payload);
+  return res.data;
+};
+
+export const regenerateJobThumbnailBase = async (jobId: string): Promise<ThumbnailUpdateResponse> => {
+  const res = await api.post(`/jobs/${jobId}/thumbnail/base/regenerate`);
+  return res.data;
+};
+
+export const selectJobThumbnailBase = async (jobId: string, filename: string): Promise<ThumbnailUpdateResponse> => {
+  const res = await api.post(`/jobs/${jobId}/thumbnail/base/select`, { filename });
   return res.data;
 };
 
