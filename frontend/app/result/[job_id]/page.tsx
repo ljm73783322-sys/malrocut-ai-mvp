@@ -1,22 +1,35 @@
 "use client";
 import type { ChangeEvent, PointerEvent } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   getDownloadUrl,
   getRepresentativeThumbnailBaseUrl,
   getRepresentativeThumbnailUrl,
   getResultPackageDownloadUrl,
+  getThumbnailAbsoluteUrl,
+  getTimelineThumbnails,
+  regenerateJobThumbnailBase,
+  selectJobThumbnailBase,
   updateJobThumbnailText,
   uploadJobThumbnail,
+  type ThumbnailCoverStyle,
   type ThumbnailTextPayload,
+  type TimelineThumbnail,
 } from "@/lib/api";
 
 const POSITION_PERCENT = {
   top: { x: 50, y: 20 },
-  center: { x: 50, y: 50 },
+  center: { x: 50, y: 58 },
   bottom: { x: 50, y: 80 },
 } as const;
+
+const COVER_STYLE_OPTIONS: Array<{ value: ThumbnailCoverStyle; label: string }> = [
+  { value: "blur", label: "자연스럽게 흐리기" },
+  { value: "dim", label: "어둡게 가리기" },
+  { value: "black_box", label: "검은 박스로 가리기" },
+  { value: "none", label: "가리지 않기" },
+];
 
 function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
@@ -53,6 +66,8 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
     string | null
   >(null);
   const [thumbnailBusy, setThumbnailBusy] = useState(false);
+  const [thumbnailCandidates, setThumbnailCandidates] = useState<TimelineThumbnail[]>([]);
+  const [thumbnailCandidatesLoading, setThumbnailCandidatesLoading] = useState(false);
   const [thumbnailVersion, setThumbnailVersion] = useState(Date.now());
   const [thumbnailTextPayload, setThumbnailTextPayload] =
     useState<ThumbnailTextPayload>({
@@ -63,15 +78,16 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
       position: "center",
       position_x: POSITION_PERCENT.center.x,
       position_y: POSITION_PERCENT.center.y,
+      cover_style: "blur",
     });
   const thumbnailPreviewRef = useRef<HTMLDivElement>(null);
 
   const videoUrl = getDownloadUrl(params.job_id, "video");
   const baseThumbnailUrl = getRepresentativeThumbnailUrl(params.job_id);
   const baseThumbnailEditUrl = getRepresentativeThumbnailBaseUrl(params.job_id);
+  const coverStyle = thumbnailTextPayload.cover_style ?? "blur";
   const thumbnailUrl = `${baseThumbnailUrl}?v=${thumbnailVersion}`;
-  const thumbnailEditBackgroundUrl = `${baseThumbnailEditUrl}?v=${thumbnailVersion}`;
-  const thumbnailDownloadUrl = getDownloadUrl(params.job_id, "thumbnail");
+  const thumbnailEditBackgroundUrl = `${baseThumbnailEditUrl}?v=${thumbnailVersion}&cover_style=${coverStyle}`;
   const packageDownloadUrl = getResultPackageDownloadUrl(params.job_id);
   const initialTextPosition = getInitialTextPosition(
     thumbnailTextPayload.position,
@@ -83,14 +99,41 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
     thumbnailTextPayload.position_y ?? initialTextPosition.y,
   );
   const hasThumbnailText = thumbnailTextPayload.text.trim().length > 0;
-  const previewThumbnailUrl = hasThumbnailText
-    ? thumbnailEditBackgroundUrl
-    : thumbnailUrl;
+  const previewThumbnailUrl = thumbnailEditBackgroundUrl;
 
   const refreshThumbnail = () => {
     setThumbnailError(false);
     setThumbnailVersion(Date.now());
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadThumbnailCandidates = async () => {
+      setThumbnailCandidatesLoading(true);
+      try {
+        const response = await getTimelineThumbnails(params.job_id);
+        if (!cancelled) {
+          setThumbnailCandidates(response.thumbnails.slice(0, 5));
+        }
+      } catch (err) {
+        console.error("[result] 후보 썸네일 로드 실패:", err);
+        if (!cancelled) {
+          setThumbnailCandidates([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setThumbnailCandidatesLoading(false);
+        }
+      }
+    };
+
+    loadThumbnailCandidates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [params.job_id]);
 
   const handleThumbnailFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     setThumbnailFile(event.target.files?.[0] ?? null);
@@ -165,6 +208,47 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
     }
   };
 
+  const handleSelectThumbnailCandidate = async (candidate: TimelineThumbnail) => {
+    const filename = candidate.url.split("/").pop();
+    if (!filename) {
+      return;
+    }
+
+    setThumbnailBusy(true);
+    setThumbnailActionError(null);
+    setThumbnailMessage(null);
+
+    try {
+      await selectJobThumbnailBase(params.job_id, filename);
+      setThumbnailMessage("선택한 후보 프레임이 썸네일 base로 적용되었습니다.");
+      refreshThumbnail();
+    } catch (err) {
+      console.error("[result] 후보 썸네일 적용 실패:", err);
+      setThumbnailActionError("후보 프레임을 썸네일 base로 적용하지 못했습니다.");
+    } finally {
+      setThumbnailBusy(false);
+    }
+  };
+
+  const handleRegenerateThumbnailBase = async () => {
+    setThumbnailBusy(true);
+    setThumbnailActionError(null);
+    setThumbnailMessage(null);
+
+    try {
+      await regenerateJobThumbnailBase(params.job_id);
+      setThumbnailMessage("썸네일 base 이미지가 다시 생성되었습니다.");
+      refreshThumbnail();
+    } catch (err) {
+      console.error("[result] 썸네일 base 재생성 실패:", err);
+      setThumbnailActionError(
+        "썸네일 base 재생성에 실패했습니다. 원본 영상 또는 업로드 이미지를 확인해 주세요.",
+      );
+    } finally {
+      setThumbnailBusy(false);
+    }
+  };
+
   const handleApplyThumbnailText = async () => {
     if (!thumbnailTextPayload.text.trim()) {
       setThumbnailActionError("썸네일 문구를 입력해 주세요.");
@@ -187,6 +271,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
         position: thumbnailTextPayload.position,
         position_x: overlayPositionX,
         position_y: overlayPositionY,
+        cover_style: coverStyle,
       };
 
       if (process.env.NODE_ENV !== "production") {
@@ -244,7 +329,6 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
           >
             <img
               src={previewThumbnailUrl}
-              src={thumbnailUrl}
               alt="유튜브 대표 썸네일 미리보기"
               className="block w-full object-cover"
               onError={() => setThumbnailError(true)}
@@ -253,13 +337,14 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
               <div
                 role="button"
                 tabIndex={0}
+                data-testid="thumbnail-text-overlay"
+                title="thumbnail-text-overlay"
                 aria-label="썸네일 문구 위치 드래그"
                 onPointerDown={handleTextPointerDown}
                 onPointerMove={handleTextPointerMove}
                 onPointerUp={handleTextPointerUp}
                 onPointerCancel={handleTextPointerUp}
                 className="absolute z-20 max-w-[90%] cursor-move select-none touch-none whitespace-pre-wrap rounded-lg px-4 py-2 text-center font-extrabold leading-tight shadow-lg ring-2 ring-white/70 pointer-events-auto"
-                className="absolute z-10 max-w-[90%] cursor-move select-none touch-none whitespace-pre-wrap rounded-lg px-4 py-2 text-center font-extrabold leading-tight shadow-lg ring-2 ring-white/70"
                 style={{
                   left: `${overlayPositionX}%`,
                   top: `${overlayPositionY}%`,
@@ -303,6 +388,47 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
               >
                 직접 썸네일 업로드
               </button>
+              <button
+                type="button"
+                onClick={handleRegenerateThumbnailBase}
+                disabled={thumbnailBusy}
+                className="mt-3 w-full rounded-xl bg-orange-100 px-5 py-3 text-base font-bold text-orange-800 shadow hover:bg-orange-200 disabled:cursor-not-allowed disabled:bg-orange-50 disabled:text-orange-300"
+              >
+                base 썸네일 다시 생성
+              </button>
+
+              <div className="mt-5 rounded-xl border border-orange-100 bg-orange-50 p-3">
+                <p className="text-sm font-bold text-orange-900">
+                  후보 프레임 선택
+                </p>
+                <p className="mt-1 text-xs text-orange-700">
+                  기존 자막이 덜 보이는 프레임을 base로 사용할 수 있습니다.
+                </p>
+                {thumbnailCandidatesLoading ? (
+                  <p className="mt-3 text-sm text-gray-500">후보를 불러오는 중입니다.</p>
+                ) : thumbnailCandidates.length > 0 ? (
+                  <div className="mt-3 grid grid-cols-5 gap-2">
+                    {thumbnailCandidates.map((candidate) => (
+                      <button
+                        key={`${candidate.time}-${candidate.url}`}
+                        type="button"
+                        onClick={() => handleSelectThumbnailCandidate(candidate)}
+                        disabled={thumbnailBusy}
+                        className="overflow-hidden rounded-lg border-2 border-transparent bg-white shadow-sm hover:border-orange-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        title={`${candidate.time}초 프레임을 base로 사용`}
+                      >
+                        <img
+                          src={`${getThumbnailAbsoluteUrl(candidate.url)}?v=${thumbnailVersion}`}
+                          alt={`${candidate.time}초 썸네일 후보`}
+                          className="aspect-video w-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-gray-500">사용 가능한 후보 프레임이 없습니다.</p>
+                )}
+              </div>
             </div>
 
             <div className="rounded-xl bg-white p-4 shadow-sm border border-orange-100">
@@ -365,6 +491,25 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
                   </select>
                 </label>
                 <label className="text-sm font-bold text-gray-700">
+                  기존 자막 처리 방식
+                  <select
+                    value={coverStyle}
+                    onChange={(event) =>
+                      setThumbnailTextPayload((prev) => ({
+                        ...prev,
+                        cover_style: event.target.value as ThumbnailCoverStyle,
+                      }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"
+                  >
+                    {COVER_STYLE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm font-bold text-gray-700">
                   글자 색상
                   <input
                     type="color"
@@ -407,7 +552,6 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
 
           <p className="mt-4 text-sm text-gray-500">
             위 썸네일의 문구 박스를 드래그해서 위치를 조정하세요.
-            위 썸네일에서 문구를 드래그해 위치를 조정하세요.
           </p>
           {thumbnailMessage && (
             <p className="mt-3 rounded-lg bg-green-100 px-4 py-3 font-bold text-green-700">
@@ -422,7 +566,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
         </div>
 
         <a
-          href={thumbnailDownloadUrl}
+          href={thumbnailUrl}
           download="thumbnail.jpg"
           className="mt-6 block bg-orange-500 text-white text-2xl font-bold py-5 px-8 rounded-2xl shadow-lg hover:bg-orange-600 text-center"
         >
@@ -438,7 +582,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
           📹 완성된 영상 저장하기
         </a>
         <a
-          href={thumbnailDownloadUrl}
+          href={thumbnailUrl}
           download="thumbnail.jpg"
           className="bg-orange-500 text-white text-3xl font-bold py-6 px-8 rounded-2xl shadow-lg hover:bg-orange-600 text-center"
         >

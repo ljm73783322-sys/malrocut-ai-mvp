@@ -4,12 +4,13 @@ import zipfile
 import tempfile
 import json
 import shutil
+import sys
 from datetime import datetime, timezone
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
-from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, UnidentifiedImageError
 
 from ..models.job import JobStatus
 from ..services import job_store, video_service, edit_service, render_service, thumbnail_service
@@ -20,7 +21,12 @@ router = APIRouter()
 
 VALID_JOB_STATUSES = {"completed", "failed", "rendering", "pending", "unknown"}
 THUMBNAIL_BASE_FILENAME = "thumbnail_base.jpg"
-DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO = 0.24
+THUMBNAIL_UPLOADED_BASE_FILENAME = "thumbnail_uploaded_base.jpg"
+THUMBNAIL_SELECTED_BASE_FILENAME = "thumbnail_selected_base.jpg"
+VALID_THUMBNAIL_COVER_STYLES = {"black_box", "blur", "dim", "none"}
+DEFAULT_THUMBNAIL_COVER_STYLE = "blur"
+DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO = 0.30
+DEFAULT_THUMBNAIL_SUBTITLE_COVER_CENTER_Y = 0.68
 
 
 def _storage_root() -> str:
@@ -263,6 +269,14 @@ def _thumbnail_base_path(job_dir: str) -> str:
     return os.path.join(job_dir, THUMBNAIL_BASE_FILENAME)
 
 
+def _thumbnail_uploaded_base_path(job_dir: str) -> str:
+    return os.path.join(job_dir, THUMBNAIL_UPLOADED_BASE_FILENAME)
+
+
+def _thumbnail_selected_base_path(job_dir: str) -> str:
+    return os.path.join(job_dir, THUMBNAIL_SELECTED_BASE_FILENAME)
+
+
 def _read_edit_command(job_dir: str) -> dict:
     edit_command_path = os.path.join(job_dir, "edit_command.json")
     if not os.path.isfile(edit_command_path):
@@ -278,8 +292,6 @@ def _read_edit_command(job_dir: str) -> dict:
 
 def _thumbnail_subtitle_cover_ratio(job_dir: str) -> float:
     cmd = _read_edit_command(job_dir)
-    if cmd.get("cover_subtitle_area", True) is False:
-        return 0
 
     try:
         ratio = float(cmd.get("subtitle_cover_ratio", DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO))
@@ -288,15 +300,101 @@ def _thumbnail_subtitle_cover_ratio(job_dir: str) -> float:
     return _clamp_number(ratio, 0, 0.5)
 
 
-def _draw_thumbnail_subtitle_cover(draw: ImageDraw.ImageDraw, image_size: tuple[int, int], job_dir: str) -> None:
+def _normalize_thumbnail_cover_style(value: str | None) -> str:
+    style = (value or DEFAULT_THUMBNAIL_COVER_STYLE).strip().lower()
+    if style not in VALID_THUMBNAIL_COVER_STYLES:
+        raise HTTPException(status_code=400, detail="Invalid cover_style")
+    return style
+
+
+def _save_image_as_jpeg(source_path: str, destination_path: str) -> None:
+    with Image.open(source_path) as source_image:
+        source_image.convert("RGB").save(destination_path, format="JPEG", quality=92)
+
+
+def regenerate_thumbnail_base(job_id: str) -> str:
+    """Regenerate a clean base thumbnail without trusting a possibly text-composited thumbnail.jpg."""
+    job_dir = _require_existing_job_dir(job_id)
+    base_path = _thumbnail_base_path(job_dir)
+    selected_base_path = _thumbnail_selected_base_path(job_dir)
+    uploaded_base_path = _thumbnail_uploaded_base_path(job_dir)
+    input_path = os.path.join(job_dir, "input.mp4")
+    thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
+
+    if os.path.isfile(selected_base_path):
+        _save_image_as_jpeg(selected_base_path, base_path)
+        return base_path
+
+    if os.path.isfile(uploaded_base_path):
+        _save_image_as_jpeg(uploaded_base_path, base_path)
+        return base_path
+
+    try:
+        os.remove(base_path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"[jobs] thumbnail_base.jpg 삭제 실패: {exc}", file=sys.stderr)
+
+    if os.path.isfile(input_path):
+        render_service._ensure_valid_thumbnail(base_path, input_path)
+        if render_service._is_valid_thumbnail(base_path):
+            return base_path
+
+    if os.path.isfile(thumbnail_path):
+        print(
+            f"[jobs] WARNING: {job_id} thumbnail_base.jpg 생성 실패 - "
+            "오염 가능성이 있는 thumbnail.jpg를 최후 fallback으로 사용합니다.",
+            file=sys.stderr,
+        )
+        _save_image_as_jpeg(thumbnail_path, base_path)
+        return base_path
+
+    raise HTTPException(status_code=404, detail="Thumbnail base not found")
+
+
+def _thumbnail_subtitle_cover_bounds(image_size: tuple[int, int], job_dir: str) -> tuple[int, int, int, int] | None:
     ratio = _thumbnail_subtitle_cover_ratio(job_dir)
     if ratio <= 0:
-        return
+        return None
 
     image_width, image_height = image_size
     cover_height = max(1, int(image_height * ratio))
-    cover_top = max(0, image_height - cover_height)
-    draw.rectangle((0, cover_top, image_width, image_height), fill=(0, 0, 0))
+
+    # 기존 자막은 맨 아래가 아니라 화면 중하단에 위치하는 경우가 많습니다.
+    # 하단 30%만 덮으면 y=70% 위쪽 자막 픽셀이 남을 수 있으므로,
+    # 기본 30% band를 화면 높이 68% 중심에 배치해 대략 53%~83%를 처리합니다.
+    cover_center_y = int(image_height * DEFAULT_THUMBNAIL_SUBTITLE_COVER_CENTER_Y)
+    cover_top = int(cover_center_y - cover_height / 2)
+    cover_top = int(_clamp_number(cover_top, 0, max(0, image_height - cover_height)))
+    cover_bottom = min(image_height, cover_top + cover_height)
+    return (0, cover_top, image_width, cover_bottom)
+
+
+def _apply_thumbnail_subtitle_cover(image: Image.Image, job_dir: str, cover_style: str | None) -> Image.Image:
+    style = _normalize_thumbnail_cover_style(cover_style)
+    if style == "none":
+        return image
+
+    cover_box = _thumbnail_subtitle_cover_bounds(image.size, job_dir)
+    if cover_box is None:
+        return image
+
+    if style == "black_box":
+        draw = ImageDraw.Draw(image)
+        draw.rectangle(cover_box, fill=(0, 0, 0))
+        return image
+
+    region = image.crop(cover_box)
+    if style == "dim":
+        covered_region = ImageEnhance.Brightness(region).enhance(0.35)
+    else:
+        blur_radius = max(8, int(image.size[1] * 0.025))
+        covered_region = region.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        covered_region = ImageEnhance.Brightness(covered_region).enhance(0.72)
+
+    image.paste(covered_region, cover_box)
+    return image
 
 
 def _background_box_bounds(
@@ -354,6 +452,11 @@ class ThumbnailTextRequest(BaseModel):
     position_x: float | None = None
     position_y: float | None = None
     reset_base: bool = False
+    cover_style: str = DEFAULT_THUMBNAIL_COVER_STYLE
+
+
+class ThumbnailBaseSelectRequest(BaseModel):
+    filename: str
 
 
 class EditRequest(BaseModel):
@@ -478,8 +581,17 @@ async def upload_job_thumbnail(job_id: str, file: UploadFile = File(...)):
     try:
         with Image.open(file.file) as image:
             clean_image = image.convert("RGB")
+            selected_base_path = _thumbnail_selected_base_path(job_dir)
+            uploaded_base_path = _thumbnail_uploaded_base_path(job_dir)
             clean_image.save(thumbnail_path, format="JPEG", quality=92)
             clean_image.save(base_path, format="JPEG", quality=92)
+            clean_image.save(uploaded_base_path, format="JPEG", quality=92)
+            try:
+                os.remove(selected_base_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
     except (UnidentifiedImageError, OSError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid image file")
 
@@ -490,7 +602,6 @@ async def upload_job_thumbnail(job_id: str, file: UploadFile = File(...)):
 async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     job_dir = _require_existing_job_dir(job_id)
     thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
-    base_path = _thumbnail_base_path(job_dir)
 
     text = req.text.strip()
     if not text:
@@ -505,18 +616,12 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     font = _thumbnail_font(req.font_size)
 
     try:
-        if not os.path.isfile(base_path) and os.path.isfile(thumbnail_path):
-            with Image.open(thumbnail_path) as current:
-                current.convert("RGB").save(base_path, format="JPEG", quality=92)
+        base_path = regenerate_thumbnail_base(job_id)
+        with Image.open(base_path) as base_image:
+            image = base_image.convert("RGB")
 
-        if os.path.isfile(base_path):
-            with Image.open(base_path) as base_image:
-                image = base_image.convert("RGB")
-        else:
-            image = Image.new("RGB", (1280, 720), (24, 24, 24))
-
+        image = _apply_thumbnail_subtitle_cover(image, job_dir, req.cover_style)
         draw = ImageDraw.Draw(image)
-        _draw_thumbnail_subtitle_cover(draw, image.size, job_dir)
         text_box = draw.multiline_textbbox((0, 0), text, font=font, spacing=12, stroke_width=3)
         text_width = text_box[2] - text_box[0]
         text_height = text_box[3] - text_box[1]
@@ -575,21 +680,43 @@ async def get_representative_thumbnail(job_id: str):
     return FileResponse(path=file_path, filename=filename, media_type="image/jpeg")
 
 
-@router.get("/{job_id}/thumbnail/base")
-async def get_representative_thumbnail_base(job_id: str):
-    """문구 편집용 base 썸네일을 반환하되 기존 자막 영역은 가립니다."""
-    job_dir = _require_existing_job_dir(job_id)
-    base_path = _thumbnail_base_path(job_dir)
-    thumbnail_path = _safe_job_file_path(job_id, "thumbnail.jpg")
-    source_path = base_path if os.path.isfile(base_path) else thumbnail_path
-    if not os.path.exists(source_path):
-        raise HTTPException(status_code=404, detail="Thumbnail not found")
+@router.post("/{job_id}/thumbnail/base/regenerate")
+async def regenerate_representative_thumbnail_base(job_id: str):
+    regenerate_thumbnail_base(job_id)
+    return _thumbnail_success(job_id)
 
+
+@router.post("/{job_id}/thumbnail/base/select")
+async def select_representative_thumbnail_base(job_id: str, req: ThumbnailBaseSelectRequest):
+    job_dir = _require_existing_job_dir(job_id)
+    filename = req.filename
+    if os.path.basename(filename) != filename or not filename.lower().endswith(".jpg"):
+        raise HTTPException(status_code=400, detail="Invalid thumbnail filename")
+
+    source_path = os.path.join(job_dir, "thumbnails", filename)
+    if not os.path.isfile(source_path):
+        raise HTTPException(status_code=404, detail="Thumbnail candidate not found")
+
+    base_path = _thumbnail_base_path(job_dir)
+    selected_base_path = _thumbnail_selected_base_path(job_dir)
     try:
+        _save_image_as_jpeg(source_path, base_path)
+        _save_image_as_jpeg(source_path, selected_base_path)
+    except OSError:
+        raise HTTPException(status_code=400, detail="Thumbnail candidate could not be selected")
+
+    return _thumbnail_success(job_id)
+
+
+@router.get("/{job_id}/thumbnail/base")
+async def get_representative_thumbnail_base(job_id: str, cover_style: str = DEFAULT_THUMBNAIL_COVER_STYLE):
+    """문구 편집용 base 썸네일을 반환하되 기존 자막 영역은 선택한 방식으로 정리합니다."""
+    job_dir = _require_existing_job_dir(job_id)
+    try:
+        source_path = regenerate_thumbnail_base(job_id)
         with Image.open(source_path) as source_image:
             image = source_image.convert("RGB")
-            draw = ImageDraw.Draw(image)
-            _draw_thumbnail_subtitle_cover(draw, image.size, job_dir)
+            image = _apply_thumbnail_subtitle_cover(image, job_dir, cover_style)
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
             tmp_path = tmp.name
             tmp.close()
