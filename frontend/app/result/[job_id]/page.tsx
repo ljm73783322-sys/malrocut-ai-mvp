@@ -7,6 +7,7 @@ import {
   getRepresentativeThumbnailBaseUrl,
   getRepresentativeThumbnailUrl,
   getResultPackageDownloadUrl,
+  regenerateJobThumbnailBase,
   updateJobThumbnailText,
   uploadJobThumbnail,
   type ThumbnailTextPayload,
@@ -71,7 +72,6 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
   const baseThumbnailEditUrl = getRepresentativeThumbnailBaseUrl(params.job_id);
   const thumbnailUrl = `${baseThumbnailUrl}?v=${thumbnailVersion}`;
   const thumbnailEditBackgroundUrl = `${baseThumbnailEditUrl}?v=${thumbnailVersion}`;
-  const thumbnailDownloadUrl = getDownloadUrl(params.job_id, "thumbnail");
   const packageDownloadUrl = getResultPackageDownloadUrl(params.job_id);
   const initialTextPosition = getInitialTextPosition(
     thumbnailTextPayload.position,
@@ -83,9 +83,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
     thumbnailTextPayload.position_y ?? initialTextPosition.y,
   );
   const hasThumbnailText = thumbnailTextPayload.text.trim().length > 0;
-  const previewThumbnailUrl = hasThumbnailText
-    ? thumbnailEditBackgroundUrl
-    : thumbnailUrl;
+  const previewThumbnailUrl = thumbnailEditBackgroundUrl;
 
   const refreshThumbnail = () => {
     setThumbnailError(false);
@@ -159,6 +157,25 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
       console.error("[result] 썸네일 업로드 실패:", err);
       setThumbnailActionError(
         "썸네일 업로드에 실패했습니다. png, jpg, jpeg, webp 이미지를 사용해 주세요.",
+      );
+    } finally {
+      setThumbnailBusy(false);
+    }
+  };
+
+  const handleRegenerateThumbnailBase = async () => {
+    setThumbnailBusy(true);
+    setThumbnailActionError(null);
+    setThumbnailMessage(null);
+
+    try {
+      await regenerateJobThumbnailBase(params.job_id);
+      setThumbnailMessage("썸네일 base 이미지가 다시 생성되었습니다.");
+      refreshThumbnail();
+    } catch (err) {
+      console.error("[result] 썸네일 base 재생성 실패:", err);
+      setThumbnailActionError(
+        "썸네일 base 재생성에 실패했습니다. 원본 영상 또는 업로드 이미지를 확인해 주세요.",
       );
     } finally {
       setThumbnailBusy(false);
@@ -244,7 +261,6 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
           >
             <img
               src={previewThumbnailUrl}
-              src={thumbnailUrl}
               alt="유튜브 대표 썸네일 미리보기"
               className="block w-full object-cover"
               onError={() => setThumbnailError(true)}
@@ -253,13 +269,14 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
               <div
                 role="button"
                 tabIndex={0}
+                data-testid="thumbnail-text-overlay"
+                title="thumbnail-text-overlay"
                 aria-label="썸네일 문구 위치 드래그"
                 onPointerDown={handleTextPointerDown}
                 onPointerMove={handleTextPointerMove}
                 onPointerUp={handleTextPointerUp}
                 onPointerCancel={handleTextPointerUp}
                 className="absolute z-20 max-w-[90%] cursor-move select-none touch-none whitespace-pre-wrap rounded-lg px-4 py-2 text-center font-extrabold leading-tight shadow-lg ring-2 ring-white/70 pointer-events-auto"
-                className="absolute z-10 max-w-[90%] cursor-move select-none touch-none whitespace-pre-wrap rounded-lg px-4 py-2 text-center font-extrabold leading-tight shadow-lg ring-2 ring-white/70"
                 style={{
                   left: `${overlayPositionX}%`,
                   top: `${overlayPositionY}%`,
@@ -302,6 +319,14 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
                 className="mt-4 w-full rounded-xl bg-orange-500 px-5 py-3 text-lg font-bold text-white shadow hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-300"
               >
                 직접 썸네일 업로드
+              </button>
+              <button
+                type="button"
+                onClick={handleRegenerateThumbnailBase}
+                disabled={thumbnailBusy}
+                className="mt-3 w-full rounded-xl bg-orange-100 px-5 py-3 text-base font-bold text-orange-800 shadow hover:bg-orange-200 disabled:cursor-not-allowed disabled:bg-orange-50 disabled:text-orange-300"
+              >
+                base 썸네일 다시 생성
               </button>
             </div>
 
@@ -407,7 +432,6 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
 
           <p className="mt-4 text-sm text-gray-500">
             위 썸네일의 문구 박스를 드래그해서 위치를 조정하세요.
-            위 썸네일에서 문구를 드래그해 위치를 조정하세요.
           </p>
           {thumbnailMessage && (
             <p className="mt-3 rounded-lg bg-green-100 px-4 py-3 font-bold text-green-700">
@@ -422,7 +446,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
         </div>
 
         <a
-          href={thumbnailDownloadUrl}
+          href={thumbnailUrl}
           download="thumbnail.jpg"
           className="mt-6 block bg-orange-500 text-white text-2xl font-bold py-5 px-8 rounded-2xl shadow-lg hover:bg-orange-600 text-center"
         >
@@ -438,7 +462,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
           📹 완성된 영상 저장하기
         </a>
         <a
-          href={thumbnailDownloadUrl}
+          href={thumbnailUrl}
           download="thumbnail.jpg"
           className="bg-orange-500 text-white text-3xl font-bold py-6 px-8 rounded-2xl shadow-lg hover:bg-orange-600 text-center"
         >
