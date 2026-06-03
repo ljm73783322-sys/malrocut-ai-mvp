@@ -4,6 +4,7 @@ import zipfile
 import tempfile
 import json
 import shutil
+import sys
 from datetime import datetime, timezone
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
@@ -20,6 +21,7 @@ router = APIRouter()
 
 VALID_JOB_STATUSES = {"completed", "failed", "rendering", "pending", "unknown"}
 THUMBNAIL_BASE_FILENAME = "thumbnail_base.jpg"
+THUMBNAIL_UPLOADED_BASE_FILENAME = "thumbnail_uploaded_base.jpg"
 DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO = 0.30
 
 
@@ -263,6 +265,10 @@ def _thumbnail_base_path(job_dir: str) -> str:
     return os.path.join(job_dir, THUMBNAIL_BASE_FILENAME)
 
 
+def _thumbnail_uploaded_base_path(job_dir: str) -> str:
+    return os.path.join(job_dir, THUMBNAIL_UPLOADED_BASE_FILENAME)
+
+
 def _read_edit_command(job_dir: str) -> dict:
     edit_command_path = os.path.join(job_dir, "edit_command.json")
     if not os.path.isfile(edit_command_path):
@@ -285,6 +291,46 @@ def _thumbnail_subtitle_cover_ratio(job_dir: str) -> float:
         ratio = DEFAULT_THUMBNAIL_SUBTITLE_COVER_RATIO
     return _clamp_number(ratio, 0, 0.5)
 
+
+def _save_image_as_jpeg(source_path: str, destination_path: str) -> None:
+    with Image.open(source_path) as source_image:
+        source_image.convert("RGB").save(destination_path, format="JPEG", quality=92)
+
+
+def regenerate_thumbnail_base(job_id: str) -> str:
+    """Regenerate a clean base thumbnail without trusting a possibly text-composited thumbnail.jpg."""
+    job_dir = _require_existing_job_dir(job_id)
+    base_path = _thumbnail_base_path(job_dir)
+    uploaded_base_path = _thumbnail_uploaded_base_path(job_dir)
+    input_path = os.path.join(job_dir, "input.mp4")
+    thumbnail_path = os.path.join(job_dir, "thumbnail.jpg")
+
+    if os.path.isfile(uploaded_base_path):
+        _save_image_as_jpeg(uploaded_base_path, base_path)
+        return base_path
+
+    try:
+        os.remove(base_path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"[jobs] thumbnail_base.jpg 삭제 실패: {exc}", file=sys.stderr)
+
+    if os.path.isfile(input_path):
+        render_service._ensure_valid_thumbnail(base_path, input_path)
+        if render_service._is_valid_thumbnail(base_path):
+            return base_path
+
+    if os.path.isfile(thumbnail_path):
+        print(
+            f"[jobs] WARNING: {job_id} thumbnail_base.jpg 생성 실패 - "
+            "오염 가능성이 있는 thumbnail.jpg를 최후 fallback으로 사용합니다.",
+            file=sys.stderr,
+        )
+        _save_image_as_jpeg(thumbnail_path, base_path)
+        return base_path
+
+    raise HTTPException(status_code=404, detail="Thumbnail base not found")
 
 def _ensure_thumbnail_base(job_dir: str) -> str:
     """Ensure an untexted thumbnail base exists without copying a possibly polluted thumbnail.jpg."""
@@ -488,8 +534,10 @@ async def upload_job_thumbnail(job_id: str, file: UploadFile = File(...)):
     try:
         with Image.open(file.file) as image:
             clean_image = image.convert("RGB")
+            uploaded_base_path = _thumbnail_uploaded_base_path(job_dir)
             clean_image.save(thumbnail_path, format="JPEG", quality=92)
             clean_image.save(base_path, format="JPEG", quality=92)
+            clean_image.save(uploaded_base_path, format="JPEG", quality=92)
     except (UnidentifiedImageError, OSError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid image file")
 
@@ -514,6 +562,7 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
     font = _thumbnail_font(req.font_size)
 
     try:
+        base_path = regenerate_thumbnail_base(job_id)
         base_path = _ensure_thumbnail_base(job_dir)
         with Image.open(base_path) as base_image:
             image = base_image.convert("RGB")
@@ -578,11 +627,18 @@ async def get_representative_thumbnail(job_id: str):
     return FileResponse(path=file_path, filename=filename, media_type="image/jpeg")
 
 
+@router.post("/{job_id}/thumbnail/base/regenerate")
+async def regenerate_representative_thumbnail_base(job_id: str):
+    regenerate_thumbnail_base(job_id)
+    return _thumbnail_success(job_id)
+
+
 @router.get("/{job_id}/thumbnail/base")
 async def get_representative_thumbnail_base(job_id: str):
     """문구 편집용 base 썸네일을 반환하되 기존 자막 영역은 가립니다."""
     job_dir = _require_existing_job_dir(job_id)
     try:
+        source_path = regenerate_thumbnail_base(job_id)
         source_path = _ensure_thumbnail_base(job_dir)
         with Image.open(source_path) as source_image:
             image = source_image.convert("RGB")

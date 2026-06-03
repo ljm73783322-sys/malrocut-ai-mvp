@@ -183,6 +183,11 @@ export const updateJobThumbnailText = async (
   return res.data;
 };
 
+export const regenerateJobThumbnailBase = async (jobId: string): Promise<ThumbnailUpdateResponse> => {
+  const res = await api.post(`/jobs/${jobId}/thumbnail/base/regenerate`);
+  return res.data;
+};
+
 // ─── URL 생성 헬퍼 ────────────────────────────────────────────────────────
 
 /** 원본 영상 스트리밍 URL */
