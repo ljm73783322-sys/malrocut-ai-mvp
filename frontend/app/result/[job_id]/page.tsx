@@ -11,6 +11,7 @@ import {
   getTimelineThumbnails,
   regenerateJobThumbnailBase,
   selectJobThumbnailBase,
+  regenerateJobThumbnailBase,
   updateJobThumbnailText,
   uploadJobThumbnail,
   type ThumbnailCoverStyle,
@@ -88,6 +89,7 @@ export default function ResultPage({ params }: { params: { job_id: string } }) {
   const coverStyle = thumbnailTextPayload.cover_style ?? "blur";
   const thumbnailUrl = `${baseThumbnailUrl}?v=${thumbnailVersion}`;
   const thumbnailEditBackgroundUrl = `${baseThumbnailEditUrl}?v=${thumbnailVersion}&cover_style=${coverStyle}`;
+  const thumbnailEditBackgroundUrl = `${baseThumbnailEditUrl}?v=${thumbnailVersion}`;
   const packageDownloadUrl = getResultPackageDownloadUrl(params.job_id);
   const initialTextPosition = getInitialTextPosition(
     thumbnailTextPayload.position,

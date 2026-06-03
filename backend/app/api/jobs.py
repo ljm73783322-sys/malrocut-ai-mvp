@@ -354,6 +354,19 @@ def regenerate_thumbnail_base(job_id: str) -> str:
 
 
 def _thumbnail_subtitle_cover_bounds(image_size: tuple[int, int], job_dir: str) -> tuple[int, int, int, int] | None:
+def _ensure_thumbnail_base(job_dir: str) -> str:
+    """Ensure an untexted thumbnail base exists without copying a possibly polluted thumbnail.jpg."""
+    base_path = _thumbnail_base_path(job_dir)
+    if os.path.isfile(base_path):
+        return base_path
+
+    input_path = os.path.join(job_dir, "input.mp4")
+    render_service._ensure_valid_thumbnail(base_path, input_path)
+    if not os.path.isfile(base_path):
+        raise HTTPException(status_code=404, detail="Thumbnail base not found")
+    return base_path
+
+def _draw_thumbnail_subtitle_cover(draw: ImageDraw.ImageDraw, image_size: tuple[int, int], job_dir: str) -> None:
     ratio = _thumbnail_subtitle_cover_ratio(job_dir)
     if ratio <= 0:
         return None
@@ -364,6 +377,7 @@ def _thumbnail_subtitle_cover_bounds(image_size: tuple[int, int], job_dir: str) 
     # 기존 자막은 맨 아래가 아니라 화면 중하단에 위치하는 경우가 많습니다.
     # 하단 30%만 덮으면 y=70% 위쪽 자막 픽셀이 남을 수 있으므로,
     # 기본 30% band를 화면 높이 68% 중심에 배치해 대략 53%~83%를 처리합니다.
+    # 기본 30% band를 화면 높이 68% 중심에 배치해 대략 53%~83%를 가립니다.
     cover_center_y = int(image_height * DEFAULT_THUMBNAIL_SUBTITLE_COVER_CENTER_Y)
     cover_top = int(cover_center_y - cover_height / 2)
     cover_top = int(_clamp_number(cover_top, 0, max(0, image_height - cover_height)))
@@ -395,6 +409,7 @@ def _apply_thumbnail_subtitle_cover(image: Image.Image, job_dir: str, cover_styl
 
     image.paste(covered_region, cover_box)
     return image
+    draw.rectangle((0, cover_top, image_width, cover_bottom), fill=(0, 0, 0))
 
 
 def _background_box_bounds(
@@ -617,6 +632,7 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
 
     try:
         base_path = regenerate_thumbnail_base(job_id)
+        base_path = _ensure_thumbnail_base(job_dir)
         with Image.open(base_path) as base_image:
             image = base_image.convert("RGB")
 
@@ -714,6 +730,13 @@ async def get_representative_thumbnail_base(job_id: str, cover_style: str = DEFA
     job_dir = _require_existing_job_dir(job_id)
     try:
         source_path = regenerate_thumbnail_base(job_id)
+@router.get("/{job_id}/thumbnail/base")
+async def get_representative_thumbnail_base(job_id: str):
+    """문구 편집용 base 썸네일을 반환하되 기존 자막 영역은 가립니다."""
+    job_dir = _require_existing_job_dir(job_id)
+    try:
+        source_path = regenerate_thumbnail_base(job_id)
+        source_path = _ensure_thumbnail_base(job_dir)
         with Image.open(source_path) as source_image:
             image = source_image.convert("RGB")
             image = _apply_thumbnail_subtitle_cover(image, job_dir, cover_style)
