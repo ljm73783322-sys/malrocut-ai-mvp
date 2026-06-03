@@ -332,6 +332,17 @@ def regenerate_thumbnail_base(job_id: str) -> str:
 
     raise HTTPException(status_code=404, detail="Thumbnail base not found")
 
+def _ensure_thumbnail_base(job_dir: str) -> str:
+    """Ensure an untexted thumbnail base exists without copying a possibly polluted thumbnail.jpg."""
+    base_path = _thumbnail_base_path(job_dir)
+    if os.path.isfile(base_path):
+        return base_path
+
+    input_path = os.path.join(job_dir, "input.mp4")
+    render_service._ensure_valid_thumbnail(base_path, input_path)
+    if not os.path.isfile(base_path):
+        raise HTTPException(status_code=404, detail="Thumbnail base not found")
+    return base_path
 
 def _draw_thumbnail_subtitle_cover(draw: ImageDraw.ImageDraw, image_size: tuple[int, int], job_dir: str) -> None:
     ratio = _thumbnail_subtitle_cover_ratio(job_dir)
@@ -552,6 +563,7 @@ async def update_job_thumbnail_text(job_id: str, req: ThumbnailTextRequest):
 
     try:
         base_path = regenerate_thumbnail_base(job_id)
+        base_path = _ensure_thumbnail_base(job_dir)
         with Image.open(base_path) as base_image:
             image = base_image.convert("RGB")
 
@@ -627,6 +639,7 @@ async def get_representative_thumbnail_base(job_id: str):
     job_dir = _require_existing_job_dir(job_id)
     try:
         source_path = regenerate_thumbnail_base(job_id)
+        source_path = _ensure_thumbnail_base(job_dir)
         with Image.open(source_path) as source_image:
             image = source_image.convert("RGB")
             draw = ImageDraw.Draw(image)
